@@ -1,0 +1,177 @@
+import { useState, useEffect, useRef } from 'react';
+import { MarkdownStreamParser, ParsedMDNode } from '../lib/MDStreamParser';
+
+interface MarkdownStreamRendererProps {
+    content?: string | null;
+}
+
+// Utility function to unescape common escaped characters
+const unescapeContent = (content?: string | null): string => {
+    if (!content) return '';
+    return content
+        .replace(/\\"/g, '"')        // Unescape quotes
+        .replace(/\\'/g, "'")        // Unescape single quotes
+        .replace(/\\n/g, '\n')       // Unescape newlines
+        .replace(/\\t/g, '\t')       // Unescape tabs
+        .replace(/\\r/g, '\r')       // Unescape carriage returns
+        .replace(/\\\\/g, '\\')      // Unescape backslashes
+        .replace(/\\b/g, '\b')       // Unescape backspace
+        .replace(/\\f/g, '\f');      // Unescape form feed
+};
+
+const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode => {
+    if (typeof node === 'string') {
+        return node;
+    }
+
+    const { element, children, attributes } = node;
+    const props = attributes.reduce<Record<string, any>>((acc: Record<string, any>, attr: Record<string, any>) => ({ ...acc, ...attr }), {} as Record<string, any>);
+
+    // Helper to render children with UL/OL merging
+    const renderChildrenMerged = (kids: (ParsedMDNode | string)[], keyPrefix: string): React.ReactNode[] => {
+        const out: React.ReactNode[] = [];
+        let i = 0;
+        while (i < kids.length) {
+            const current = kids[i];
+            if (typeof current !== 'string' && (current.element === 'ul' || current.element === 'ol')) {
+                const isOrdered = current.element === 'ol';
+                const startIndex = i;
+                const grouped: ParsedMDNode[] = [];
+                while (i < kids.length) {
+                    const candidate = kids[i];
+                    if (typeof candidate === 'string' && candidate === '\n') {
+                        // Skip newline characters when grouping
+                        i++;
+                        continue;
+                    }
+                    if (typeof candidate !== 'string' && candidate.element === (isOrdered ? 'ol' : 'ul')) {
+                        grouped.push(candidate);
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                out.push(
+                    isOrdered ? (
+                        <ol key={`${keyPrefix}-ol-${startIndex}`} className="list-decimal list-inside ml-1 space-y-2 mb-4">
+                            {grouped.map((g, idx) => (
+                                <li key={`${keyPrefix}-ol-${startIndex}-li-${idx}`} className="text-gray-800 leading-relaxed break-words">
+                                    {g.children
+                                        .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
+                                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${keyPrefix}-ol-${startIndex}-li-${idx}-${cidx}`))}
+                                </li>
+                            ))}
+                        </ol>
+                    ) : (
+                        <ul key={`${keyPrefix}-ul-${startIndex}`} className="list-disc list-inside ml-1 space-y-2 mb-4">
+                            {grouped.map((g, idx) => (
+                                <li key={`${keyPrefix}-ul-${startIndex}-li-${idx}`} className="text-gray-800 leading-relaxed break-words">
+                                    {g.children
+                                        .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
+                                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${keyPrefix}-ul-${startIndex}-li-${idx}-${cidx}`))}
+                                </li>
+                            ))}
+                        </ul>
+                    )
+                );
+                continue;
+            }
+            out.push(renderNode(current, `${keyPrefix}-${i}`));
+            i++;
+        }
+        return out;
+    };
+
+    // Render children recursively with merging logic
+    console.log('children', element, children);
+    const renderedChildren = renderChildrenMerged(children, key);
+
+    switch (element) {
+        case 'root':
+            return <div key={key} className="whitespace-pre-wrap break-inside-avoid break-words" {...props}>{renderedChildren}</div>;
+        case 'h1':
+            return <h1 key={key} className="text-lg font-bold mb-2 mt-4 first:mt-0" {...props}>{renderedChildren}</h1>;
+        case 'h2':
+            return <h2 key={key} className="text-base font-semibold mb-2 mt-3" {...props}>{renderedChildren}</h2>;
+        case 'h3':
+            return <h3 key={key} className="text-sm font-semibold mb-1 mt-2" {...props}>{renderedChildren}</h3>;
+        case 'h4':
+            return <h4 key={key} className="text-sm font-medium mb-1" {...props}>{renderedChildren}</h4>;
+        case 'h5':
+            return <h5 key={key} className="text-xs font-medium text-gray-800 mb-1" {...props}>{renderedChildren}</h5>;
+        case 'h6':
+            return <h6 key={key} className="text-xs font-medium text-gray-800 mb-1" {...props}>{renderedChildren}</h6>;
+        case 'p':
+            return <p key={key} className="text-xs leading-relaxed text-gray-800 mb-2" {...props}>{renderedChildren}</p>;
+        case 'strong':
+            return <strong key={key} className="font-semibold" {...props}>{renderedChildren}</strong>;
+        case 'em':
+            return <em key={key} className="italic text-gray-800" {...props}>{renderedChildren}</em>;
+        case 'em-strong':
+            return <strong key={key} className="font-semibold italic" {...props}>{renderedChildren}</strong>;
+        case 'code':
+            // Inline code: force normal font weight and no monospaced font
+            return <code key={key} className="bg-[hsl(0,0%,95%)] text-slate-700 px-1 py-0.5 rounded-md border-[0.5px] border-[hsl(240,13.6%,93.4%)] font-normal text-xs break-words" {...props}>{renderedChildren}</code>;
+        case 'pre':
+            return <pre key={key} className="bg-[hsl(0,0%,95%)] border border-[hsl(240,13.6%,93.4%)] rounded-md p-3 overflow-x-auto mb-2 break-words whitespace-pre-wrap" {...props}>{renderedChildren}</pre>;
+        case 'del':
+            return <del key={key} className="line-through text-gray-500" {...props}>{renderedChildren}</del>;
+        case 'ul':
+            // Fallback: single list node renders as a list with one item
+            return (
+                <ul key={key} className="list-disc list-inside ml-1" {...props}>
+                    <li className="text-gray-800 leading-relaxed break-words">
+                        {children
+                            .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
+                            .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-ulitem-${cidx}`))}
+                    </li>
+                </ul>
+            );
+        case 'ol':
+            return (
+                <ol key={key} className="list-decimal list-inside ml-1" {...props}>
+                    <li className="text-gray-800 leading-relaxed break-words">
+                        {children
+                            .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
+                            .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-olitem-${cidx}`))}
+                    </li>
+                </ol>
+            );
+        case 'blockquote':
+            return <blockquote key={key} className="border-l-4 border-gray-200 pl-3 py-1 my-2 italic text-xs text-gray-800" {...props}>{renderedChildren}</blockquote>;
+        case 'hr':
+            return <hr key={key} className="border-t border-gray-200 my-3" {...props} />;
+        default:
+            return <span key={key} className="text-xs text-gray-800" {...props}>{renderedChildren}</span>;
+    }
+};
+
+export const MarkdownStreamRenderer: React.FC<MarkdownStreamRendererProps> = ({ content }) => {
+    const [parsedTree, setParsedTree] = useState<ParsedMDNode | null>(null);
+
+    const parser = useRef<MarkdownStreamParser>(new MarkdownStreamParser());
+
+    useEffect(() => {
+        parser.current.clearAllStates();
+
+        // Clean the escaped content before parsing
+        const cleanedContent = unescapeContent(content);
+        parser.current.parse(cleanedContent);
+        console.log('children: parsedTree', parser.current.root);
+        setParsedTree(parser.current.root);
+
+        return () => {
+            parser.current.clearAllStates();
+        }
+    }, [content]);
+
+    if (!parsedTree) {
+        return null;
+    }
+
+    return (
+        <div>
+            {renderNode(parsedTree, 'root')}
+        </div>
+    );
+}; 
