@@ -19,6 +19,9 @@ export interface PatternHandler {
     reuseTerminator?: boolean; // if true, append the char that ended the pattern to parent
     // Nesting policy: undefined/null => allow all; [] => disallow all; [names...] => allow only listed
     allowedNestings?: string[] | null;
+    // Returns the length of the pattern prefix (e.g., 2 for "**", 1 for "*", 1 for "`")
+    // Used to determine how much text before the pattern should be flushed to parent
+    prefixLength?(buffer: string): number;
 }
 
 interface ActiveEntry {
@@ -216,13 +219,27 @@ export class MarkdownStreamParser {
             const result = this.patterns[i].start(this.buffer, this);
 
             if (result === "commit") {
+                const handler = this.patterns[i];
+
+                // Calculate prefix length (how many chars make up the pattern opener + first content char)
+                // Default: 2 for "**" + 1 for first char = 3, but let handler specify
+                const prefixLen = handler.prefixLength?.(this.buffer) ?? 0;
+
+                // Flush any text that comes BEFORE the pattern prefix
+                if (prefixLen > 0 && this.buffer.length > prefixLen) {
+                    const textBeforePattern = this.buffer.slice(0, -prefixLen);
+                    if (textBeforePattern.length > 0) {
+                        this.appendToCurrentNode(textBeforePattern);
+                    }
+                }
+
                 // Let handler decide what initial content to insert into the new node
-                const initialNodeText = this.patterns[i].commit?.(this.buffer, this) || "";
+                const initialNodeText = handler.commit?.(this.buffer, this) || "";
                 // Discard remaining buffer when committing to a pattern start
                 this.buffer = "";
                 // Create new node under current container and descend
                 const newNode: ParsedMDNode = {
-                    element: this.patterns[i].elementName,
+                    element: handler.elementName,
                     children: [],
                     attributes: []
                 };
@@ -232,7 +249,7 @@ export class MarkdownStreamParser {
                 parent.children.push(newNode);
                 this.activePath.push({
                     pathIndex: parent.children.length - 1,
-                    handler: this.patterns[i]
+                    handler: handler
                 });
                 // If handler requested initial text, add it now
                 if (initialNodeText) {
@@ -264,7 +281,7 @@ export class MarkdownStreamParser {
                     return false;
                 }
             }
-            return p.start(this.buffer) === "potential" || p.start(this.buffer) === "commit";
+            return p.start(this.buffer, this) === "potential" || p.start(this.buffer, this) === "commit";
         });
     }
 

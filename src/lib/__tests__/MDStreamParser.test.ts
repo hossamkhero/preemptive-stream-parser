@@ -149,7 +149,13 @@ describe('MarkdownStreamParser', () => {
                 (c) => typeof c !== 'string' && c.element === 'ul'
             ) as ParsedMDNode
             expect(ul).toBeDefined()
-            expect(ul.children.join('')).toContain('Item 1')
+
+            // ul should contain li elements
+            const li = ul.children.find(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode
+            expect(li).toBeDefined()
+            expect(li.children.join('')).toContain('Item 1')
         })
 
         test('should parse unordered list with asterisk', () => {
@@ -158,6 +164,11 @@ describe('MarkdownStreamParser', () => {
                 (c) => typeof c !== 'string' && c.element === 'ul'
             ) as ParsedMDNode
             expect(ul).toBeDefined()
+
+            const li = ul.children.find(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode
+            expect(li).toBeDefined()
         })
 
         test('should parse unordered list with plus', () => {
@@ -166,6 +177,11 @@ describe('MarkdownStreamParser', () => {
                 (c) => typeof c !== 'string' && c.element === 'ul'
             ) as ParsedMDNode
             expect(ul).toBeDefined()
+
+            const li = ul.children.find(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode
+            expect(li).toBeDefined()
         })
     })
 
@@ -176,7 +192,121 @@ describe('MarkdownStreamParser', () => {
                 (c) => typeof c !== 'string' && c.element === 'ol'
             ) as ParsedMDNode
             expect(ol).toBeDefined()
-            expect(ol.children.join('')).toContain('First item')
+
+            // ol should contain li elements  
+            const li = ol.children.find(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode
+            expect(li).toBeDefined()
+            expect(li.children.join('')).toContain('First item')
+        })
+    })
+
+    describe('Multi-item Lists', () => {
+        test('should parse multiple unordered list items', () => {
+            const result = parser.parse('- Item 1\n- Item 2\n- Item 3')
+            const ul = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ul'
+            ) as ParsedMDNode
+            expect(ul).toBeDefined()
+
+            // Should have 3 li elements
+            const lis = ul.children.filter(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode[]
+            expect(lis.length).toBe(3)
+            expect(lis[0].children.join('')).toContain('Item 1')
+            expect(lis[1].children.join('')).toContain('Item 2')
+            expect(lis[2].children.join('')).toContain('Item 3')
+        })
+
+        test('should parse multiple ordered list items', () => {
+            const result = parser.parse('1. First\n2. Second\n3. Third')
+            const ol = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ol'
+            ) as ParsedMDNode
+            expect(ol).toBeDefined()
+
+            const lis = ol.children.filter(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode[]
+            expect(lis.length).toBe(3)
+            expect(lis[0].children.join('')).toContain('First')
+            expect(lis[1].children.join('')).toContain('Second')
+            expect(lis[2].children.join('')).toContain('Third')
+        })
+
+        test('should keep list type when mixing markers - ul first', () => {
+            // When starting with -, subsequent 1. should still be li in ul
+            const result = parser.parse('- this is ul\n1. this is also in ul')
+            const ul = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ul'
+            ) as ParsedMDNode
+            expect(ul).toBeDefined()
+
+            // Should NOT have a separate ol
+            const ol = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ol'
+            )
+            expect(ol).toBeUndefined()
+
+            // Both items should be in the ul
+            const lis = ul.children.filter(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode[]
+            expect(lis.length).toBe(2)
+            expect(lis[0].children.join('')).toContain('this is ul')
+            expect(lis[1].children.join('')).toContain('this is also in ul')
+        })
+
+        test('should keep list type when mixing markers - ol first', () => {
+            // When starting with 1., subsequent - should still be li in ol
+            const result = parser.parse('1. this is ol\n- this is also in ol')
+            const ol = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ol'
+            ) as ParsedMDNode
+            expect(ol).toBeDefined()
+
+            // Should NOT have a separate ul
+            const ul = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ul'
+            )
+            expect(ul).toBeUndefined()
+
+            // Both items should be in the ol
+            const lis = ol.children.filter(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode[]
+            expect(lis.length).toBe(2)
+            expect(lis[0].children.join('')).toContain('this is ol')
+            expect(lis[1].children.join('')).toContain('this is also in ol')
+        })
+
+        test('should separate lists with empty line', () => {
+            // Empty line between two lists should create separate lists
+            const result = parser.parse('- ul item 1\n- ul item 2\n\n1. ol item 1\n2. ol item 2')
+
+            const ul = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ul'
+            ) as ParsedMDNode
+            expect(ul).toBeDefined()
+
+            const ol = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'ol'
+            ) as ParsedMDNode
+            expect(ol).toBeDefined()
+
+            // ul should have 2 items
+            const ulLis = ul.children.filter(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode[]
+            expect(ulLis.length).toBe(2)
+
+            // ol should have 2 items
+            const olLis = ol.children.filter(
+                (c) => typeof c !== 'string' && c.element === 'li'
+            ) as ParsedMDNode[]
+            expect(olLis.length).toBe(2)
         })
     })
 
@@ -264,6 +394,111 @@ describe('MarkdownStreamParser', () => {
         test('should handle special characters', () => {
             const result = parser.parse('Special chars: <>&"\'')
             expect(result.element).toBe('root')
+        })
+    })
+
+    describe('Inline Element Spacing', () => {
+        test('should preserve space before bold with asterisks', () => {
+            const result = parser.parse('This is a **bold** word')
+            expect(result.children[0]).toBe('This is a ')
+            const strong = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'strong'
+            ) as ParsedMDNode
+            expect(strong).toBeDefined()
+            expect(strong.children.join('')).toBe('bold')
+            expect(result.children[2]).toBe(' word')
+        })
+
+        test('should preserve space before bold with underscores', () => {
+            const result = parser.parse('This is a __bold__ word')
+            expect(result.children[0]).toBe('This is a ')
+            const strong = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'strong'
+            ) as ParsedMDNode
+            expect(strong).toBeDefined()
+            expect(strong.children.join('')).toBe('bold')
+        })
+
+        test('should preserve space before italic with asterisk', () => {
+            const result = parser.parse('This is a *italic* word')
+            expect(result.children[0]).toBe('This is a ')
+            const em = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'em'
+            ) as ParsedMDNode
+            expect(em).toBeDefined()
+            expect(em.children.join('')).toBe('italic')
+        })
+
+        test('should preserve space before italic with underscore', () => {
+            const result = parser.parse('This is a _italic_ word')
+            expect(result.children[0]).toBe('This is a ')
+            const em = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'em'
+            ) as ParsedMDNode
+            expect(em).toBeDefined()
+            expect(em.children.join('')).toBe('italic')
+        })
+
+        test('should preserve space before inline code', () => {
+            const result = parser.parse('Use the `const` keyword')
+            expect(result.children[0]).toBe('Use the ')
+            const code = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'code'
+            ) as ParsedMDNode
+            expect(code).toBeDefined()
+            expect(code.children.join('')).toBe('const')
+            expect(result.children[2]).toBe(' keyword')
+        })
+
+        test('should preserve space before links', () => {
+            const result = parser.parse('Visit [Google](https://google.com) now')
+            expect(result.children[0]).toBe('Visit ')
+            const link = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'a'
+            ) as ParsedMDNode
+            expect(link).toBeDefined()
+            expect(link.children.join('')).toBe('Google')
+            expect(result.children[2]).toBe(' now')
+        })
+
+        test('should handle multiple inline elements with proper spacing', () => {
+            const result = parser.parse('This is a **bold** statement and _italic_ text.')
+            // First part before bold
+            expect(result.children[0]).toBe('This is a ')
+
+            // Find bold
+            const strong = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'strong'
+            ) as ParsedMDNode
+            expect(strong).toBeDefined()
+            expect(strong.children.join('')).toBe('bold')
+
+            // Find italic
+            const em = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'em'
+            ) as ParsedMDNode
+            expect(em).toBeDefined()
+            expect(em.children.join('')).toBe('italic')
+        })
+
+        test('should handle inline element at start of text', () => {
+            const result = parser.parse('**Bold** at start')
+            const strong = result.children[0] as ParsedMDNode
+            expect(typeof strong !== 'string').toBe(true)
+            expect(strong.element).toBe('strong')
+            expect(strong.children.join('')).toBe('Bold')
+            expect(result.children[1]).toBe(' at start')
+        })
+
+        test('should handle consecutive inline elements', () => {
+            const result = parser.parse('**bold** *italic* `code`')
+            const elements = result.children.filter(
+                (c) => typeof c !== 'string'
+            ) as ParsedMDNode[]
+            expect(elements).toHaveLength(3)
+            expect(elements[0].element).toBe('strong')
+            expect(elements[1].element).toBe('em')
+            expect(elements[2].element).toBe('code')
         })
     })
 

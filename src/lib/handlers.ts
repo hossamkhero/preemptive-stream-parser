@@ -69,7 +69,7 @@ function createHeaderHandler(level: number): PatternHandler {
             return false;
         },
 
-        upgrade(node: ParsedMDNode, buffer: string, parser: MarkdownStreamParser): void {
+        upgrade(_node: ParsedMDNode, _buffer: string, _parser: MarkdownStreamParser): void {
             // Already handled inline, nothing to strip since we started feeding after "# "
         }
     };
@@ -102,6 +102,11 @@ const boldHandler: PatternHandler = {
     commit(buffer: string) {
         // Put the last char from buffer (first content after **)
         return buffer ? buffer[buffer.length - 1] : "";
+    },
+
+    prefixLength(): number {
+        // Pattern is ** + first content char = 3 chars
+        return 3;
     },
 
     feed(char: string, node: ParsedMDNode, parser: MarkdownStreamParser): boolean {
@@ -141,6 +146,11 @@ const italicHandler: PatternHandler = {
 
     commit(buffer: string) {
         return buffer ? buffer[buffer.length - 1] : "";
+    },
+
+    prefixLength(): number {
+        // Pattern is * + first content char = 2 chars
+        return 2;
     },
 
     feed(char: string, node: ParsedMDNode, parser: MarkdownStreamParser): boolean {
@@ -183,6 +193,11 @@ const italicUnderscoreHandler: PatternHandler = {
         return buffer ? buffer[buffer.length - 1] : "";
     },
 
+    prefixLength(): number {
+        // Pattern is _ + first content char = 2 chars
+        return 2;
+    },
+
     feed(char: string, node: ParsedMDNode, parser: MarkdownStreamParser): boolean {
         if (char === "_") {
             // Buffer-based close for italic underscore
@@ -221,6 +236,11 @@ const boldUnderscoreHandler: PatternHandler = {
         return "no";
     },
 
+    prefixLength(): number {
+        // Pattern is __ + first content char = 3 chars
+        return 3;
+    },
+
     commit(buffer: string) {
         return buffer ? buffer[buffer.length - 1] : "";
     },
@@ -255,6 +275,11 @@ const codeHandler: PatternHandler = {
         // Check if buffer ends with ` followed by a non-whitespace character
         if (buffer.match(/`[^\s]$/)) return "commit";
         return "no";
+    },
+
+    prefixLength(): number {
+        // Pattern is ` + first content char = 2 chars
+        return 2;
     },
 
     commit(buffer: string) {
@@ -295,6 +320,11 @@ const linkHandler: PatternHandler = {
         // Check if buffer ends with [ followed by a non-whitespace character
         if (buffer.match(/\[[^\s]$/)) return "commit";
         return "no";
+    },
+
+    prefixLength(): number {
+        // Pattern is [ + first content char = 2 chars
+        return 2;
     },
 
     commit(buffer: string) {
@@ -343,13 +373,38 @@ const linkHandler: PatternHandler = {
     }
 };
 
-// Unordered list handler
+// Helper to get the last list in the current node's children (for preventing new list creation)
+function getLastListInParent(parser: MarkdownStreamParser): ParsedMDNode | null {
+    const current = parser.getCurrentNode();
+    // Check if we just finished a list item and the parent is a list
+    if (current.element === 'ul' || current.element === 'ol') {
+        return current;
+    }
+    // Check if the last child of current is a list that we can append to
+    if (current.children.length > 0) {
+        const lastChild = current.children[current.children.length - 1];
+        if (typeof lastChild !== 'string' && (lastChild.element === 'ul' || lastChild.element === 'ol')) {
+            // If there's a list as the last child, we can continue appending to it
+            return lastChild;
+        }
+    }
+    return null;
+}
+
+// Helper to check if we're currently inside a list element
+function isInsideListElement(parser: MarkdownStreamParser): boolean {
+    const current = parser.getCurrentNode();
+    return current.element === 'ul' || current.element === 'ol';
+}
+
+// Unordered list handler - creates ul and first li
 const unorderedListHandler: PatternHandler = {
     name: "ul",
     elementName: "ul",
-    reuseTerminator: true,
-    // Lists allow only inline content within a line
+    reuseTerminator: true, // Reuse the newline so subsequent patterns can detect start of line
+    // Lists can nest list items
     allowedNestings: [
+        'li',
         'strong_asterisk',
         'strong_underscore',
         'em_asterisk',
@@ -359,6 +414,15 @@ const unorderedListHandler: PatternHandler = {
     ],
 
     start(buffer: string, parser?: MarkdownStreamParser): "no" | "potential" | "commit" {
+        // Don't start a new list if we're already in one
+        if (parser && isInsideListElement(parser)) return "no";
+
+        // Check if there's already a list we can continue
+        if (parser) {
+            const existingList = getLastListInParent(parser);
+            if (existingList) return "no"; // Let the list item handler take over
+        }
+
         // Allow only leading whitespace before list marker at start of a line
         if ((/^[ \t]*[-*+]$/).test(buffer)) {
             if (parser && !isAtStartOfLine(parser)) return "no";
@@ -377,36 +441,96 @@ const unorderedListHandler: PatternHandler = {
             if (parser && !isAtStartOfLine(parser)) return "no";
             return "commit";
         }
-        // Handle case where buffer is just spaces at start of line (waiting for list marker)
-        if ((/^[ \t]+$/).test(buffer)) {
-            if (parser && !isAtStartOfLine(parser)) return "no";
-            return "potential";
-        }
         return "no";
     },
 
     feed(char: string, node: ParsedMDNode, parser: MarkdownStreamParser): boolean {
-        if (char === "\n") {
-            return true; // Done with list item
+        // Track state: are we waiting to see if this is a new list item?
+        // We use node.attributes[0].waitingForListItem for this
+        if (!node.attributes[0]) {
+            node.attributes[0] = { waitingForListItem: false, markerBuffer: '' };
+        }
+        const state = node.attributes[0];
+
+        // Get or create the current li
+        let currentLi: ParsedMDNode | null = null;
+        for (let i = node.children.length - 1; i >= 0; i--) {
+            const child = node.children[i];
+            if (typeof child !== 'string' && child.element === 'li') {
+                currentLi = child;
+                break;
+            }
         }
 
-        // Append char to node's children
-        const lastChild = node.children[node.children.length - 1];
-        if (typeof lastChild === "string") {
-            node.children[node.children.length - 1] = lastChild + char;
-        } else {
-            node.children.push(char);
+        // If no li exists, create one
+        if (!currentLi) {
+            currentLi = { element: 'li', children: [], attributes: [] };
+            node.children.push(currentLi);
         }
+
+        if (char === "\n") {
+            if (state.waitingForListItem) {
+                // We got a second newline - this is an empty line, end the list
+                state.waitingForListItem = false;
+                return true;
+            }
+            // End of a line - set flag to check for list continuation
+            state.waitingForListItem = true;
+            state.markerBuffer = '';
+            return false;
+        }
+
+        if (state.waitingForListItem) {
+            // We're at the start of a new line after a list item
+            state.markerBuffer += char;
+
+            // Check if this could be a list marker
+            const isUnorderedMarker = /^[ \t]*[-*+]$/.test(state.markerBuffer);
+            const isUnorderedComplete = /^[ \t]*[-*+] $/.test(state.markerBuffer);
+            const isOrderedMarker = /^[ \t]*\d+\.?$/.test(state.markerBuffer);
+            const isOrderedComplete = /^[ \t]*\d+\. $/.test(state.markerBuffer);
+            const couldBeContinuation = /^[ \t]*$/.test(state.markerBuffer); // just spaces so far
+
+            if (isUnorderedComplete || isOrderedComplete) {
+                // It's a new list item! Create a new li
+                currentLi = { element: 'li', children: [], attributes: [] };
+                node.children.push(currentLi);
+                state.waitingForListItem = false;
+                state.markerBuffer = '';
+                return false;
+            }
+
+            if (isUnorderedMarker || isOrderedMarker || couldBeContinuation || char === ' ' || char === '\t') {
+                // Still could be a list item, wait for more
+                return false;
+            }
+
+            // Not a list item - this is the end of the list
+            // Don't consume this character, let it go back to parent
+            state.waitingForListItem = false;
+            return true;
+        }
+
+        // Normal case: append char to the current li
+        parser.addTextToNode(currentLi, char);
         return false;
+    },
+
+    // Custom commit to create initial li
+    commit(_buffer: string, _parser: MarkdownStreamParser): string {
+        // We'll create the li structure - don't return initial text here
+        // The li will be created in feed
+        return "";
     }
 };
 
-// Ordered list handler
+// Ordered list handler - creates ol and first li
 const orderedListHandler: PatternHandler = {
     name: "ol",
     elementName: "ol",
-    reuseTerminator: true,
+    reuseTerminator: true, // Reuse the newline so subsequent patterns can detect start of line
     allowedNestings: [
+        'li',
         'strong_asterisk',
         'strong_underscore',
         'em_asterisk',
@@ -416,6 +540,15 @@ const orderedListHandler: PatternHandler = {
     ],
 
     start(buffer: string, parser?: MarkdownStreamParser): "no" | "potential" | "commit" {
+        // Don't start a new list if we're already in one
+        if (parser && isInsideListElement(parser)) return "no";
+
+        // Check if there's already a list we can continue
+        if (parser) {
+            const existingList = getLastListInParent(parser);
+            if (existingList) return "no";
+        }
+
         // Allow only leading whitespace before ordered list marker at start of a line
         if ((/^[ \t]*\d+$/).test(buffer)) {
             if (parser && !isAtStartOfLine(parser)) return "no";
@@ -442,27 +575,74 @@ const orderedListHandler: PatternHandler = {
             if (parser && !isAtStartOfLine(parser)) return "no";
             return "commit";
         }
-        // Handle case where buffer is just spaces at start of line (waiting for list marker)
-        if ((/^[ \t]+$/).test(buffer)) {
-            if (parser && !isAtStartOfLine(parser)) return "no";
-            return "potential";
-        }
         return "no";
     },
 
     feed(char: string, node: ParsedMDNode, parser: MarkdownStreamParser): boolean {
-        if (char === "\n") {
-            return true; // Done with list item
+        // Track state: are we waiting to see if this is a new list item?
+        if (!node.attributes[0]) {
+            node.attributes[0] = { waitingForListItem: false, markerBuffer: '' };
+        }
+        const state = node.attributes[0];
+
+        // Get or create the current li
+        let currentLi: ParsedMDNode | null = null;
+        for (let i = node.children.length - 1; i >= 0; i--) {
+            const child = node.children[i];
+            if (typeof child !== 'string' && child.element === 'li') {
+                currentLi = child;
+                break;
+            }
         }
 
-        // Append char to node's children
-        const lastChild = node.children[node.children.length - 1];
-        if (typeof lastChild === "string") {
-            node.children[node.children.length - 1] = lastChild + char;
-        } else {
-            node.children.push(char);
+        // If no li exists, create one
+        if (!currentLi) {
+            currentLi = { element: 'li', children: [], attributes: [] };
+            node.children.push(currentLi);
         }
+
+        if (char === "\n") {
+            if (state.waitingForListItem) {
+                // Empty line - end the list
+                state.waitingForListItem = false;
+                return true;
+            }
+            state.waitingForListItem = true;
+            state.markerBuffer = '';
+            return false;
+        }
+
+        if (state.waitingForListItem) {
+            state.markerBuffer += char;
+
+            const isUnorderedMarker = /^[ \t]*[-*+]$/.test(state.markerBuffer);
+            const isUnorderedComplete = /^[ \t]*[-*+] $/.test(state.markerBuffer);
+            const isOrderedMarker = /^[ \t]*\d+\.?$/.test(state.markerBuffer);
+            const isOrderedComplete = /^[ \t]*\d+\. $/.test(state.markerBuffer);
+            const couldBeContinuation = /^[ \t]*$/.test(state.markerBuffer);
+
+            if (isUnorderedComplete || isOrderedComplete) {
+                currentLi = { element: 'li', children: [], attributes: [] };
+                node.children.push(currentLi);
+                state.waitingForListItem = false;
+                state.markerBuffer = '';
+                return false;
+            }
+
+            if (isUnorderedMarker || isOrderedMarker || couldBeContinuation || char === ' ' || char === '\t') {
+                return false;
+            }
+
+            state.waitingForListItem = false;
+            return true;
+        }
+
+        parser.addTextToNode(currentLi, char);
         return false;
+    },
+
+    commit(_buffer: string, _parser: MarkdownStreamParser): string {
+        return "";
     }
 };
 

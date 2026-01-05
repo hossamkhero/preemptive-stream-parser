@@ -27,64 +27,15 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
     const { element, children, attributes } = node;
     const props = attributes.reduce<Record<string, any>>((acc: Record<string, any>, attr: Record<string, any>) => ({ ...acc, ...attr }), {} as Record<string, any>);
 
-    // Helper to render children with UL/OL merging
-    const renderChildrenMerged = (kids: (ParsedMDNode | string)[], keyPrefix: string): React.ReactNode[] => {
-        const out: React.ReactNode[] = [];
-        let i = 0;
-        while (i < kids.length) {
-            const current = kids[i];
-            if (typeof current !== 'string' && (current.element === 'ul' || current.element === 'ol')) {
-                const isOrdered = current.element === 'ol';
-                const startIndex = i;
-                const grouped: ParsedMDNode[] = [];
-                while (i < kids.length) {
-                    const candidate = kids[i];
-                    if (typeof candidate === 'string' && candidate === '\n') {
-                        // Skip newline characters when grouping
-                        i++;
-                        continue;
-                    }
-                    if (typeof candidate !== 'string' && candidate.element === (isOrdered ? 'ol' : 'ul')) {
-                        grouped.push(candidate);
-                        i++;
-                    } else {
-                        break;
-                    }
-                }
-                out.push(
-                    isOrdered ? (
-                        <ol key={`${keyPrefix}-ol-${startIndex}`} className="list-decimal list-inside ml-1 space-y-2 mb-4">
-                            {grouped.map((g, idx) => (
-                                <li key={`${keyPrefix}-ol-${startIndex}-li-${idx}`} className="text-gray-800 leading-relaxed break-words">
-                                    {g.children
-                                        .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
-                                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${keyPrefix}-ol-${startIndex}-li-${idx}-${cidx}`))}
-                                </li>
-                            ))}
-                        </ol>
-                    ) : (
-                        <ul key={`${keyPrefix}-ul-${startIndex}`} className="list-disc list-inside ml-1 space-y-2 mb-4">
-                            {grouped.map((g, idx) => (
-                                <li key={`${keyPrefix}-ul-${startIndex}-li-${idx}`} className="text-gray-800 leading-relaxed break-words">
-                                    {g.children
-                                        .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
-                                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${keyPrefix}-ul-${startIndex}-li-${idx}-${cidx}`))}
-                                </li>
-                            ))}
-                        </ul>
-                    )
-                );
-                continue;
-            }
-            out.push(renderNode(current, `${keyPrefix}-${i}`));
-            i++;
-        }
-        return out;
+    // Simple helper to render children, filtering out whitespace-only strings
+    const renderChildren = (kids: (ParsedMDNode | string)[], keyPrefix: string): React.ReactNode[] => {
+        return kids
+            .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
+            .map((child, idx) => renderNode(child, `${keyPrefix}-${idx}`));
     };
 
-    // Render children recursively with merging logic
-    console.log('children', element, children);
-    const renderedChildren = renderChildrenMerged(children, key);
+    // Render children recursively
+    const renderedChildren = renderChildren(children, key);
 
     switch (element) {
         case 'root':
@@ -117,25 +68,31 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
         case 'del':
             return <del key={key} className="line-through text-gray-500" {...props}>{renderedChildren}</del>;
         case 'ul':
-            // Fallback: single list node renders as a list with one item
+            // ul now contains li elements as children
             return (
-                <ul key={key} className="list-disc list-inside ml-1" {...props}>
-                    <li className="text-gray-800 leading-relaxed break-words">
-                        {children
-                            .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
-                            .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-ulitem-${cidx}`))}
-                    </li>
+                <ul key={key} className="list-disc list-inside ml-1 space-y-1 mb-4" {...props}>
+                    {children
+                        .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
+                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-ulchild-${cidx}`))}
                 </ul>
             );
         case 'ol':
+            // ol now contains li elements as children
             return (
-                <ol key={key} className="list-decimal list-inside ml-1" {...props}>
-                    <li className="text-gray-800 leading-relaxed break-words">
-                        {children
-                            .filter((child) => !(typeof child === 'string' && /^\s*$/.test(child as string)))
-                            .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-olitem-${cidx}`))}
-                    </li>
+                <ol key={key} className="list-decimal list-inside ml-1 space-y-1 mb-4" {...props}>
+                    {children
+                        .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
+                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-olchild-${cidx}`))}
                 </ol>
+            );
+        case 'li':
+            // Render list item
+            return (
+                <li key={key} className="text-gray-800 leading-relaxed break-words" {...props}>
+                    {children
+                        .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
+                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-lichild-${cidx}`))}
+                </li>
             );
         case 'blockquote':
             return <blockquote key={key} className="border-l-4 border-gray-200 pl-3 py-1 my-2 italic text-xs text-gray-800" {...props}>{renderedChildren}</blockquote>;
@@ -157,7 +114,6 @@ export const MarkdownStreamRenderer: React.FC<MarkdownStreamRendererProps> = ({ 
         // Clean the escaped content before parsing
         const cleanedContent = unescapeContent(content);
         parser.current.parse(cleanedContent);
-        console.log('children: parsedTree', parser.current.root);
         setParsedTree(parser.current.root);
 
         return () => {
