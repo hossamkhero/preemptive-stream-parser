@@ -192,6 +192,20 @@ export class MarkdownStreamParser {
         return this.root;
     }
 
+    // Call this method to finalize all active handlers when input stream ends
+    // This is useful for patterns like tables that need to finalize pending content
+    public finalize(): ParsedMDNode {
+        while (this.activePath.length > 0) {
+            const currentEntry = this.activePath[this.activePath.length - 1];
+            const current = this.getCurrentNode();
+            if (currentEntry.handler.upgrade) {
+                currentEntry.handler.upgrade(current, this.buffer, this);
+            }
+            this.activePath.pop();
+        }
+        return this.root;
+    }
+
     private tryCommit(): boolean {
         let committed = false;
 

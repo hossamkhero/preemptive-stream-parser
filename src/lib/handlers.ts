@@ -688,6 +688,191 @@ const blockquoteHandler: PatternHandler = {
     }
 };
 
+// Table handler - true character-by-character streaming
+// Each character is immediately visible in the current cell
+// Separator rows (| --- | --- |) are filtered out
+const tableHandler: PatternHandler = {
+    name: "table",
+    elementName: "table",
+    reuseTerminator: true,
+    allowedNestings: [
+        'strong_asterisk',
+        'strong_underscore',
+        'em_asterisk',
+        'em_underscore',
+        'code',
+        'a'
+    ],
+
+    start(buffer: string, parser?: MarkdownStreamParser): "no" | "potential" | "commit" {
+        // Only match at start of line
+        if (parser && !isAtStartOfLine(parser)) return "no";
+
+        // Table starts immediately when we see | at start of line
+        if (buffer === "|") return "commit";
+
+        return "no";
+    },
+
+    commit(_buffer: string, _parser: MarkdownStreamParser): string {
+        return "";
+    },
+
+    prefixLength(_buffer: string): number {
+        return 1; // Just the initial |
+    },
+
+    // Clean up empty cells/rows and filter separator rows on table end
+    // Clean up empty cells/rows and filter separator rows on table end
+    upgrade(node: ParsedMDNode, _buffer: string, _parser: MarkdownStreamParser): void {
+        // Just remove empty rows at the end (cleanup)
+        node.children = node.children.filter(child => {
+            if (typeof child === 'string') return true;
+            const row = child as ParsedMDNode;
+            if (row.element !== 'tr') return true;
+            return row.children.length > 0;
+        });
+    },
+
+    feed(char: string, node: ParsedMDNode, _parser: MarkdownStreamParser): boolean {
+        // Initialize state on first call
+        if (!node.attributes[0]) {
+            node.attributes[0] = {
+                isConfirmed: false, // Start unconfirmed
+                rowBuffer: '',      // Buffer for unconfirmed content
+                currentRow: null,   // Will be created when confirmed
+                currentCell: null,
+                afterPipe: true
+            };
+        }
+
+        const state = node.attributes[0];
+
+        // Helper to process a character into the live AST (used when confirmed)
+        const processChar = (c: string) => {
+            const row = state.currentRow as ParsedMDNode;
+
+            if (c === '|') {
+                const currentCell = state.currentCell as ParsedMDNode;
+                const cellText = (currentCell.children[0] as string || '').trim();
+
+                // If it's a leading pipe for a new cell that is empty, just mark afterPipe
+                if (state.afterPipe && !cellText) {
+                    state.afterPipe = false; // It was a leading pipe
+                    return;
+                }
+
+                // Update current cell text
+                currentCell.children[0] = cellText;
+
+                // Create new cell
+                const newCell: ParsedMDNode = {
+                    element: 'td',
+                    children: [''],
+                    attributes: []
+                };
+                row.children.push(newCell);
+                state.currentCell = newCell;
+                state.afterPipe = true;
+                return;
+            }
+
+            // Regular char
+            const currentCell = state.currentCell as ParsedMDNode;
+            currentCell.children[0] = (currentCell.children[0] as string || '') + c;
+            state.afterPipe = false;
+        };
+
+        // NEWLINE HANDLING
+        if (char === '\n') {
+            if (!state.isConfirmed) {
+                // End of unconfirmed row. Check if it's a separator or real data.
+                const isPotentialSeparator = /^[\s|:-]*$/.test(state.rowBuffer);
+                const isValidSeparator = /^\|\s*[-:]+\s*(\|\s*[-:]+\s*)*\|?$/.test(state.rowBuffer.trim());
+
+                if (isValidSeparator || isPotentialSeparator) {
+                    // It's a separator or noise. Discard.
+                    state.isConfirmed = false;
+                    state.rowBuffer = '';
+                    state.currentRow = null;
+                    state.currentCell = null;
+                    state.afterPipe = true;
+                    return false;
+                }
+
+                // It wasn't a separator? Commit it as a data row.
+                const newRow: ParsedMDNode = {
+                    element: 'tr',
+                    children: [{ element: 'td', children: [''], attributes: [] }],
+                    attributes: []
+                };
+                node.children.push(newRow);
+                state.currentRow = newRow;
+                state.currentCell = newRow.children[0];
+                state.isConfirmed = true;
+
+                // Flush buffer
+                for (const bufferedChar of state.rowBuffer) {
+                    processChar(bufferedChar);
+                }
+            }
+
+            // Prepare for next row
+            if (state.currentRow) {
+                // Clean up previous row
+                const row = state.currentRow as ParsedMDNode;
+                row.children = row.children.filter(cell => {
+                    if (typeof cell === 'string') return true;
+                    return (cell as ParsedMDNode).children.join('').trim().length > 0;
+                });
+            }
+
+            state.isConfirmed = false;
+            state.rowBuffer = '';
+            state.currentRow = null;
+            state.currentCell = null;
+            state.afterPipe = true;
+            return false;
+        }
+
+        // CONTENT HANDLING
+        if (!state.isConfirmed) {
+            state.rowBuffer += char;
+
+            // Check if this character forces confirmation
+            // Allowed separator characters: | - : space tab
+            const isSeparatorChar = /[|\-:\s]/.test(char);
+
+            if (!isSeparatorChar) {
+                // Found a data character (letter, number, etc)! definitely NOT a separator row.
+                state.isConfirmed = true;
+
+                // Initialize the row in AST
+                const newRow: ParsedMDNode = {
+                    element: 'tr',
+                    children: [{ element: 'td', children: [''], attributes: [] }],
+                    attributes: []
+                };
+                node.children.push(newRow);
+                state.currentRow = newRow;
+                state.currentCell = newRow.children[0];
+                state.afterPipe = true;
+
+                // Flush the buffer into the AST
+                for (const bufferedChar of state.rowBuffer) {
+                    processChar(bufferedChar);
+                }
+            }
+            return false;
+        }
+
+        // If confirmed, just stream directly
+        processChar(char);
+        return false;
+    }
+};
+
+
 // Horizontal rule handler
 const horizontalRuleHandler: PatternHandler = {
     name: "hr",
@@ -736,6 +921,7 @@ export const defaultHandlers: PatternHandler[] = [
     unorderedListHandler,
     orderedListHandler,
     blockquoteHandler,
+    tableHandler,
     horizontalRuleHandler
 ];
 
@@ -751,5 +937,6 @@ export {
     unorderedListHandler,
     orderedListHandler,
     blockquoteHandler,
+    tableHandler,
     horizontalRuleHandler
 };

@@ -96,8 +96,64 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
             );
         case 'blockquote':
             return <blockquote key={key} className="border-l-4 border-gray-200 pl-3 py-1 my-2 italic text-xs text-gray-800" {...props}>{renderedChildren}</blockquote>;
+        case 'a':
+            return <a key={key} href={props.href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer" {...props}>{renderedChildren}</a>;
         case 'hr':
             return <hr key={key} className="border-t border-gray-200 my-3" {...props} />;
+        case 'table':
+            return (
+                <div key={key} className="overflow-x-auto my-3">
+                    <table className="min-w-full border-collapse border border-gray-200 text-xs" {...props}>
+                        {children
+                            .filter((child) => typeof child !== 'string')
+                            .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-tablec-${cidx}`))}
+                    </table>
+                </div>
+            );
+        case 'thead':
+            return (
+                <thead key={key} className="bg-gray-50" {...props}>
+                    {children
+                        .filter((child) => typeof child !== 'string')
+                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-theadc-${cidx}`))}
+                </thead>
+            );
+        case 'tbody':
+            return (
+                <tbody key={key} className="divide-y divide-gray-200" {...props}>
+                    {children
+                        .filter((child) => typeof child !== 'string')
+                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-tbodyc-${cidx}`))}
+                </tbody>
+            );
+        case 'tr':
+            // Filter out empty cells (cells with only whitespace content)
+            const filteredCells = children.filter((child) => {
+                if (typeof child === 'string') return false;
+                const cell = child as ParsedMDNode;
+                if (cell.element !== 'td' && cell.element !== 'th') return true;
+                const cellText = cell.children.join('').trim();
+                return cellText.length > 0;
+            });
+            // Don't render empty rows
+            if (filteredCells.length === 0) return null;
+            return (
+                <tr key={key} className="hover:bg-gray-50 transition-colors" {...props}>
+                    {filteredCells.map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-trc-${cidx}`))}
+                </tr>
+            );
+        case 'th':
+            return (
+                <th key={key} className="px-3 py-2 text-left font-semibold text-gray-700 border border-gray-200" {...props}>
+                    {renderedChildren}
+                </th>
+            );
+        case 'td':
+            return (
+                <td key={key} className="px-3 py-2 text-gray-600 border border-gray-200" {...props}>
+                    {renderedChildren}
+                </td>
+            );
         default:
             return <span key={key} className="text-xs text-gray-800" {...props}>{renderedChildren}</span>;
     }

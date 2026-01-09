@@ -32,6 +32,13 @@ Check out this \`inline code\` and [link](https://example.com).
 ### Nested formatting
 
 This is **bold with _nested italic_ inside** it.
+
+# Here's another table at the end
+
+| Column 1 | Column 2 | Column 3 |
+| -------- | -------- | -------- |
+| Cell 1   | Cell 2   | Cell 3   |
+| Cell 4   | Cell 5   | Cell 6   |
 `
 
 export function TestPlayground() {
@@ -173,8 +180,8 @@ export function TestPlayground() {
                         <button
                             onClick={isStreaming ? stopStreaming : startStreaming}
                             className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${isStreaming
-                                    ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30'
-                                    : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30'
+                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30'
+                                : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30'
                                 }`}
                         >
                             {isStreaming ? '⏹ Stop' : '▶ Start'}

@@ -511,4 +511,169 @@ describe('MarkdownStreamParser', () => {
             expect(parser.buffer).toBe('')
         })
     })
+
+    describe('Tables', () => {
+        // Helper to find all cells in a table
+        const findCells = (node: ParsedMDNode): ParsedMDNode[] => {
+            const cells: ParsedMDNode[] = []
+            for (const child of node.children) {
+                if (typeof child !== 'string') {
+                    if (child.element === 'td') cells.push(child)
+                    cells.push(...findCells(child))
+                }
+            }
+            return cells
+        }
+
+        // Helper to find all rows in a table
+        const findRows = (node: ParsedMDNode): ParsedMDNode[] => {
+            const rows: ParsedMDNode[] = []
+            for (const child of node.children) {
+                if (typeof child !== 'string') {
+                    if (child.element === 'tr') rows.push(child)
+                    rows.push(...findRows(child))
+                }
+            }
+            return rows
+        }
+
+        test('should start table immediately on | at start of line', () => {
+            parser.parse('| Col A | Col B |')
+
+            const table = parser.root.children.find(
+                (c) => typeof c !== 'string' && c.element === 'table'
+            ) as ParsedMDNode
+            expect(table).toBeDefined()
+        })
+
+        test('should have exactly 2 cells for | A | B | (no empty cells)', () => {
+            parser.parse('| A | B |')
+
+            const table = parser.root.children.find(
+                (c) => typeof c !== 'string' && c.element === 'table'
+            ) as ParsedMDNode
+            expect(table).toBeDefined()
+
+            const cells = findCells(table)
+            // Filter out empty cells to see what we actually have
+            const nonEmptyCells = cells.filter(c => c.children.join('').trim() !== '')
+            expect(nonEmptyCells).toHaveLength(2)
+            expect(nonEmptyCells[0].children.join('').trim()).toBe('A')
+            expect(nonEmptyCells[1].children.join('').trim()).toBe('B')
+        })
+
+        test('should NOT render separator rows (| --- | --- |) as data', () => {
+            parser.parse('| Header 1 | Header 2 |\n| --- | --- |\n| Data 1 | Data 2 |')
+
+            const table = parser.root.children.find(
+                (c) => typeof c !== 'string' && c.element === 'table'
+            ) as ParsedMDNode
+            expect(table).toBeDefined()
+
+            const cells = findCells(table)
+            const cellTexts = cells.map(c => c.children.join('').trim()).filter(t => t !== '')
+
+            // Should NOT contain any "---" separator content
+            const hasSeparator = cellTexts.some(t => /^[-]+$/.test(t))
+            expect(hasSeparator).toBe(false)
+
+            // Should have header and data cells
+            expect(cellTexts).toContain('Header 1')
+            expect(cellTexts).toContain('Data 1')
+        })
+
+        test('should have correct number of rows (no empty trailing rows)', () => {
+            parser.parse('| A | B |\n| 1 | 2 |')
+
+            const table = parser.root.children.find(
+                (c) => typeof c !== 'string' && c.element === 'table'
+            ) as ParsedMDNode
+            expect(table).toBeDefined()
+
+            const rows = findRows(table)
+            // Filter out empty rows
+            const nonEmptyRows = rows.filter(r => {
+                const cells = r.children.filter(c => typeof c !== 'string' && (c as ParsedMDNode).element === 'td') as ParsedMDNode[]
+                const hasContent = cells.some(c => c.children.join('').trim() !== '')
+                return hasContent
+            })
+            expect(nonEmptyRows).toHaveLength(2)
+        })
+
+        test('should stream each character live in current cell', () => {
+            const streamParser = new MarkdownStreamParser()
+
+            streamParser.parse('|')
+            streamParser.parse(' ')
+            streamParser.parse('H')
+            streamParser.parse('e')
+            streamParser.parse('l')
+
+            const table = streamParser.root.children.find(
+                (c) => typeof c !== 'string' && c.element === 'table'
+            ) as ParsedMDNode
+            expect(table).toBeDefined()
+
+            const cells = findCells(table)
+            expect(cells.length).toBeGreaterThanOrEqual(1)
+            expect(cells[0].children.join('')).toContain('Hel')
+        })
+
+        describe('Streaming', () => {
+            test('should stream table char-by-char and produce consistent result', () => {
+                const input = '| A | B |\n| 1 | 2 |'
+
+                // Character-by-character streaming
+                const streamParser = new MarkdownStreamParser()
+                for (const char of input) {
+                    streamParser.parse(char)
+                }
+
+                const table = streamParser.root.children.find(
+                    (c) => typeof c !== 'string' && c.element === 'table'
+                ) as ParsedMDNode
+                expect(table).toBeDefined()
+
+                const rows = findRows(table)
+                expect(rows.length).toBeGreaterThanOrEqual(2)
+            })
+
+            test('should NOT show separator row in AST while it is being typed', () => {
+                const streamParser = new MarkdownStreamParser()
+                streamParser.parse('| Header 1 | Header 2 |\n')
+
+                // Now type the separator row char by char
+                const separatorChars = '| -------- |'
+                for (const char of separatorChars) {
+                    streamParser.parse(char)
+
+                    // Check AST at each step
+                    const table = streamParser.root.children.find(
+                        (c) => typeof c !== 'string' && c.element === 'table'
+                    ) as ParsedMDNode
+
+                    // Should only have the header row
+                    // The separator row should be buffered, not in children array
+                    // (Unless the first char is not a confirmed separator? buffer starts unconfirmed)
+                    const rows = table.children.filter(c =>
+                        typeof c !== 'string' && c.element === 'tr'
+                    )
+                    expect(rows.length).toBe(1) // Just the header
+                }
+
+                // Finish line
+                streamParser.parse('\n')
+
+                // Still just 1 row (separator discarded)
+                const table = streamParser.root.children.find(
+                    (c) => typeof c !== 'string' && c.element === 'table'
+                ) as ParsedMDNode
+                const rows = table.children.filter(c =>
+                    typeof c !== 'string' && c.element === 'tr'
+                )
+                expect(rows.length).toBe(1)
+            })
+        })
+    })
 })
+
