@@ -54,6 +54,44 @@ for (const char of markdown) {
 console.log(parser.root) // Parsed AST
 ```
 
+## General Stream Parser API
+
+If you want a non-Markdown stream parser, the core engine is now exposed as
+`StreamParser`. Provide your own pattern handlers and it will stream into the
+same AST shape.
+
+```typescript
+import { StreamParser, type PatternHandler } from './lib'
+
+const shoutHandler: PatternHandler = {
+  name: 'shout',
+  elementName: 'shout',
+  start: (buffer) => (buffer.endsWith('!!') ? 'commit' : 'no'),
+  prefixLength: () => 2,
+  commit: () => '',
+  feed: (char, node, parser) => {
+    if (char === '!') return true
+    parser.addTextToNode(node, char)
+    return false
+  }
+}
+
+const parser = new StreamParser([shoutHandler])
+parser.parse('hello!!wow!')
+```
+
+## Extending the Parser (Developer + LLM Friendly)
+
+When adding a new pattern handler:
+1. Decide the **trigger** (`start`) and whether it’s a `potential` or a `commit`.
+2. Implement `prefixLength` so the parser can flush text *before* the pattern.
+3. Use `commit` to seed the node with the first content char if needed.
+4. Implement `feed` to stream content and return `true` to close the node.
+5. Add `allowedNestings` to keep inline/block mixing safe.
+
+For a detailed LLM-focused authoring guide, see
+[`docs/LLM_GUIDE.md`](docs/LLM_GUIDE.md).
+
 ## Test Playground
 
 The UI at http://localhost:5173 provides:
