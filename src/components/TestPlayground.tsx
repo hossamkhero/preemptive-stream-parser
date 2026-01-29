@@ -629,85 +629,141 @@ export function TestPlayground() {
         }, 2)
     }, [])
 
-    const renderDiagram = useCallback((node: ParsedNode | null) => {
+    type DiagramEdge = { from: string; to: string; label?: string }
+    type DiagramModel = { nodes: string[]; edges: DiagramEdge[] }
+
+    const buildDiagramModel = useCallback((node: ParsedNode | null): DiagramModel | null => {
         if (!node) return null
         const diagram = node.children.find(
             (child) => typeof child !== 'string' && child.element === 'diagram'
         ) as ParsedNode | undefined
-        if (!diagram) {
-            return <div className="text-zinc-500 text-sm">No diagram parsed yet.</div>
-        }
+        if (!diagram) return null
 
-        const nodes = diagram.children.filter(
+        const nodeItems = diagram.children.filter(
             (child) => typeof child !== 'string' && child.element === 'node'
         ) as ParsedNode[]
-        const edges = diagram.children.filter(
+        const edgeItems = diagram.children.filter(
             (child) => typeof child !== 'string' && child.element === 'edge'
         ) as ParsedNode[]
 
-        const radius = 140
-        const centerX = 220
-        const centerY = 180
-        const positions = nodes.map((nodeItem, index) => {
-            const angle = (index / Math.max(nodes.length, 1)) * Math.PI * 2
-            return {
-                id: nodeItem.children.join(''),
-                x: centerX + radius * Math.cos(angle),
-                y: centerY + radius * Math.sin(angle)
-            }
-        })
+        const edges = edgeItems.map((edge) => ({
+            from: String(edge.children[0] ?? ''),
+            to: String(edge.children[1] ?? ''),
+            label: edge.attributes[0]?.label
+        }))
 
-        const positionMap = new Map(positions.map((pos) => [pos.id, pos]))
+        const nodeNames = nodeItems.map((nodeItem) => nodeItem.children.join(''))
+        const nodeSet = new Set(nodeNames)
+        for (const edge of edges) {
+            if (edge.from) nodeSet.add(edge.from)
+            if (edge.to) nodeSet.add(edge.to)
+        }
+
+        return {
+            nodes: Array.from(nodeSet),
+            edges
+        }
+    }, [])
+
+    const DiagramCanvas = ({ model }: { model: DiagramModel | null }) => {
+        const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+        useEffect(() => {
+            const canvas = canvasRef.current
+            if (!canvas) return
+            const ctx = canvas.getContext('2d')
+            if (!ctx) return
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            ctx.fillStyle = '#09090b'
+            ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+            if (!model || model.nodes.length === 0) {
+                ctx.fillStyle = '#a1a1aa'
+                ctx.font = '14px sans-serif'
+                ctx.fillText('Waiting for diagram data…', 16, 32)
+                return
+            }
+
+            const centerX = canvas.width / 2
+            const centerY = canvas.height / 2
+            const radius = Math.min(centerX, centerY) - 50
+            const positions = model.nodes.map((nodeId, index) => {
+                const angle = (index / Math.max(model.nodes.length, 1)) * Math.PI * 2
+                return {
+                    id: nodeId,
+                    x: centerX + radius * Math.cos(angle),
+                    y: centerY + radius * Math.sin(angle)
+                }
+            })
+
+            const positionMap = new Map(positions.map((pos) => [pos.id, pos]))
+
+            ctx.strokeStyle = '#a1a1aa'
+            ctx.lineWidth = 2
+            ctx.fillStyle = '#a1a1aa'
+            ctx.font = '12px sans-serif'
+
+            const drawArrow = (fromX: number, fromY: number, toX: number, toY: number) => {
+                const angle = Math.atan2(toY - fromY, toX - fromX)
+                const arrowLength = 10
+                const arrowAngle = Math.PI / 6
+                ctx.beginPath()
+                ctx.moveTo(fromX, fromY)
+                ctx.lineTo(toX, toY)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(toX, toY)
+                ctx.lineTo(
+                    toX - arrowLength * Math.cos(angle - arrowAngle),
+                    toY - arrowLength * Math.sin(angle - arrowAngle)
+                )
+                ctx.lineTo(
+                    toX - arrowLength * Math.cos(angle + arrowAngle),
+                    toY - arrowLength * Math.sin(angle + arrowAngle)
+                )
+                ctx.closePath()
+                ctx.fill()
+            }
+
+            for (const edge of model.edges) {
+                const from = positionMap.get(edge.from)
+                const to = positionMap.get(edge.to)
+                if (!from || !to) continue
+                drawArrow(from.x, from.y, to.x, to.y)
+                if (edge.label) {
+                    const labelX = (from.x + to.x) / 2
+                    const labelY = (from.y + to.y) / 2 - 8
+                    ctx.fillStyle = '#e4e4e7'
+                    ctx.fillText(edge.label, labelX - ctx.measureText(edge.label).width / 2, labelY)
+                    ctx.fillStyle = '#a1a1aa'
+                }
+            }
+
+            for (const pos of positions) {
+                ctx.fillStyle = '#27272a'
+                ctx.strokeStyle = '#a78bfa'
+                ctx.lineWidth = 2
+                ctx.beginPath()
+                ctx.arc(pos.x, pos.y, 20, 0, Math.PI * 2)
+                ctx.fill()
+                ctx.stroke()
+                ctx.fillStyle = '#f4f4f5'
+                ctx.font = '12px sans-serif'
+                const textWidth = ctx.measureText(pos.id).width
+                ctx.fillText(pos.id, pos.x - textWidth / 2, pos.y + 4)
+            }
+        }, [model])
 
         return (
-            <svg viewBox="0 0 440 360" className="w-full h-[260px]">
-                <defs>
-                    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
-                        <path d="M0,0 L0,6 L9,3 z" fill="#a1a1aa" />
-                    </marker>
-                </defs>
-                {edges.map((edge, index) => {
-                    const fromId = edge.children[0] as string
-                    const toId = edge.children[1] as string
-                    const from = positionMap.get(fromId)
-                    const to = positionMap.get(toId)
-                    if (!from || !to) return null
-                    return (
-                        <g key={`${fromId}-${toId}-${index}`}>
-                            <line
-                                x1={from.x}
-                                y1={from.y}
-                                x2={to.x}
-                                y2={to.y}
-                                stroke="#a1a1aa"
-                                strokeWidth="2"
-                                markerEnd="url(#arrow)"
-                            />
-                            {edge.attributes[0]?.label && (
-                                <text
-                                    x={(from.x + to.x) / 2}
-                                    y={(from.y + to.y) / 2 - 6}
-                                    fill="#e4e4e7"
-                                    fontSize="10"
-                                    textAnchor="middle"
-                                >
-                                    {edge.attributes[0].label}
-                                </text>
-                            )}
-                        </g>
-                    )
-                })}
-                {positions.map((pos) => (
-                    <g key={pos.id}>
-                        <circle cx={pos.x} cy={pos.y} r="20" fill="#27272a" stroke="#a78bfa" strokeWidth="2" />
-                        <text x={pos.x} y={pos.y + 4} textAnchor="middle" fill="#f4f4f5" fontSize="12">
-                            {pos.id}
-                        </text>
-                    </g>
-                ))}
-            </svg>
+            <canvas
+                ref={canvasRef}
+                width={440}
+                height={260}
+                className="w-full h-[260px] rounded-lg border border-zinc-800"
+            />
         )
-    }, [])
+    }
 
     const renderJson = useCallback((node: ParsedNode | null) => {
         if (!node) return 'No JSON parsed yet.'
@@ -959,7 +1015,7 @@ export function TestPlayground() {
                         </div>
                     ) : selectedConfig.renderer === 'diagram' ? (
                         <div className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px]">
-                            {renderDiagram(parsedAST)}
+                            <DiagramCanvas model={buildDiagramModel(parsedAST)} />
                         </div>
                     ) : selectedConfig.renderer === 'json' ? (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">
