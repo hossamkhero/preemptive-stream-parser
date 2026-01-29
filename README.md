@@ -34,6 +34,11 @@ src/
 ├── App.tsx                 # Main app
 ├── main.tsx               # Entry point
 └── index.css              # Styles (Tailwind v4)
+examples/
+├── README.md              # Example index
+├── markdown.ts            # Markdown + image extension example
+├── json.ts                # Streaming JSON parser example
+└── diagram.ts             # Diagram/graph DSL example
 ```
 
 ## Library Usage
@@ -152,6 +157,11 @@ When adding a new pattern handler:
 
 For a detailed LLM-focused authoring guide, see
 [`docs/LLM_GUIDE.md`](docs/LLM_GUIDE.md).
+
+## Examples
+
+See [`examples/`](examples/) for three edge-case examples (Markdown + images,
+streaming JSON, and a diagram/graph DSL).
 
 ## Test Playground
 
