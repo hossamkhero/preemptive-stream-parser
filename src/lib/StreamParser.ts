@@ -22,7 +22,7 @@ interface ActiveEntry {
     handler: PatternHandler;
 }
 
-interface StreamParserOptions {
+export interface StreamParserOptions {
     rootElement?: string;
 }
 

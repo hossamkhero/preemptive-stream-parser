@@ -75,6 +75,24 @@ export const customHandler: PatternHandler = {
 - [ ] Are nesting rules explicit and safe?
 - [ ] Did you add tests for at least one streaming scenario?
 
+## Handler Extensions (Recommended DX)
+
+Use `composeHandlers` or `createMarkdownParser` to add new behavior without
+rewriting the entire handler list. This lets you insert a handler before/after
+another handler or replace an existing handler by name.
+
+```ts
+import { createMarkdownParser, type HandlerExtension } from './lib'
+
+const extension: HandlerExtension = {
+  name: 'images',
+  handlers: [imageHandler],
+  placement: { before: 'a' }
+}
+
+const parser = createMarkdownParser([extension])
+```
+
 ## Common Pitfalls
 
 - **Forgetting `prefixLength`**: causes text loss or duplication.

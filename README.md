@@ -80,6 +80,67 @@ const parser = new StreamParser([shoutHandler])
 parser.parse('hello!!wow!')
 ```
 
+## Extending Markdown (DX-Friendly)
+
+Use the extension helpers to insert/replace handlers without rewriting the
+entire handler list.
+
+```typescript
+import {
+  createMarkdownParser,
+  type HandlerExtension,
+  type PatternHandler
+} from './lib'
+
+const imageHandler: PatternHandler = {
+  name: 'image',
+  elementName: 'img',
+  allowedNestings: [],
+  start: (buffer) => {
+    if (buffer.endsWith('![')) return 'potential'
+    if (buffer.match(/!\[[^\s]$/)) return 'commit'
+    return 'no'
+  },
+  prefixLength: () => 3, // "![a" => opener + first content char
+  commit: (buffer) => buffer[buffer.length - 1] ?? '',
+  feed: (char, node) => {
+    if (!node.attributes[0]) {
+      node.attributes[0] = { phase: 'alt', buffer: '' }
+    }
+    const state = node.attributes[0]
+    if (state.phase === 'alt') {
+      if (char === ']') {
+        state.phase = 'between'
+      } else {
+        node.children.push(char)
+      }
+      return false
+    }
+    if (state.phase === 'between') {
+      if (char === '(') state.phase = 'src'
+      return false
+    }
+    if (state.phase === 'src') {
+      if (char === ')') {
+        node.attributes[0] = { src: state.buffer }
+        return true
+      }
+      state.buffer += char
+    }
+    return false
+  }
+}
+
+const imageExtension: HandlerExtension = {
+  name: 'images',
+  handlers: [imageHandler],
+  placement: { before: 'a' }
+}
+
+const parser = createMarkdownParser([imageExtension])
+parser.parse('Hello ![Alt](https://example.com/x.png) world')
+```
+
 ## Extending the Parser (Developer + LLM Friendly)
 
 When adding a new pattern handler:

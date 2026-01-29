@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
 import { StreamParser, type ParsedNode, type PatternHandler } from '../StreamParser'
+import { composeHandlers, createMarkdownParser } from '../extensions'
 
 describe('StreamParser (generic)', () => {
     let parser: StreamParser
@@ -56,5 +57,99 @@ describe('StreamParser (generic)', () => {
         ) as ParsedNode
         expect(shout.children.join('')).toBe('b')
         expect(result.children[result.children.length - 1]).toBe('c')
+    })
+})
+
+describe('Handler extensions', () => {
+    test('should insert handlers before a named anchor', () => {
+        const a: PatternHandler = {
+            name: 'a',
+            elementName: 'a',
+            start: () => 'no'
+        }
+        const b: PatternHandler = {
+            name: 'b',
+            elementName: 'b',
+            start: () => 'no'
+        }
+        const c: PatternHandler = {
+            name: 'c',
+            elementName: 'c',
+            start: () => 'no'
+        }
+        const extra: PatternHandler = {
+            name: 'extra',
+            elementName: 'extra',
+            start: () => 'no'
+        }
+
+        const ordered = composeHandlers([a, b, c], [
+            {
+                name: 'extra',
+                handlers: [extra],
+                placement: { before: 'b' }
+            }
+        ])
+
+        expect(ordered.map((handler) => handler.name)).toEqual(['a', 'extra', 'b', 'c'])
+    })
+
+    test('should replace existing handlers when requested', () => {
+        const a: PatternHandler = {
+            name: 'a',
+            elementName: 'a',
+            start: () => 'no'
+        }
+        const replacement: PatternHandler = {
+            name: 'a',
+            elementName: 'a',
+            start: () => 'no'
+        }
+
+        const ordered = composeHandlers([a], [
+            {
+                name: 'replacement',
+                handlers: [replacement],
+                replaceExisting: true
+            }
+        ])
+
+        expect(ordered).toHaveLength(1)
+        expect(ordered[0]).toBe(replacement)
+    })
+
+    test('should allow Markdown extension handlers', () => {
+        const tagHandler: PatternHandler = {
+            name: 'tag',
+            elementName: 'tag',
+            allowedNestings: [],
+            start: (buffer) => {
+                if (buffer.endsWith('@@')) return 'commit'
+                if (buffer.endsWith('@')) return 'potential'
+                return 'no'
+            },
+            prefixLength: () => 2,
+            commit: () => '',
+            feed: (char, node, streamParser) => {
+                if (char === '@') return true
+                streamParser.addTextToNode(node, char)
+                return false
+            }
+        }
+
+        const parser = createMarkdownParser([
+            {
+                name: 'tags',
+                handlers: [tagHandler],
+                placement: { before: 'code' }
+            }
+        ])
+
+        const result = parser.parse('Hello @@world@')
+        const tag = result.children.find(
+            (c) => typeof c !== 'string' && c.element === 'tag'
+        ) as ParsedNode
+        expect(tag).toBeDefined()
+        expect(tag.children.join('')).toBe('world')
     })
 })
