@@ -69,6 +69,13 @@ export function TestPlayground() {
     }, [input])
 
     const exampleConfigs = useMemo(() => {
+        const jsonStateMap = new WeakMap<ParsedNode, {
+            stack: ParsedNode[]
+            currentKey: string | null
+            buffer: string
+            inString: boolean
+            isEscaped: boolean
+        }>()
         const imageHandler: PatternHandler = {
             name: 'image',
             elementName: 'img',
@@ -125,22 +132,16 @@ export function TestPlayground() {
             prefixLength: () => 1,
             commit: () => '',
             feed: (char, node) => {
-                if (!node.attributes[0]) {
-                    node.attributes[0] = {
+                if (!jsonStateMap.has(node)) {
+                    jsonStateMap.set(node, {
                         stack: [node],
                         currentKey: null,
                         buffer: '',
                         inString: false,
                         isEscaped: false
-                    }
+                    })
                 }
-                const state = node.attributes[0] as {
-                    stack: ParsedNode[]
-                    currentKey: string | null
-                    buffer: string
-                    inString: boolean
-                    isEscaped: boolean
-                }
+                const state = jsonStateMap.get(node)!
 
                 const flushBuffer = () => {
                     const value = state.buffer.trim()
@@ -354,7 +355,7 @@ export function TestPlayground() {
                 name: 'Diagram DSL',
                 description: 'Graph DSL that emits nodes + edges as you stream.',
                 input: 'graph{A->B;B->C;A-[fast]->C;}',
-                renderer: 'raw' as const,
+                renderer: 'diagram' as const,
                 createParser: () => new StreamParser([diagramHandler])
             }
         ]
@@ -534,6 +535,96 @@ export function TestPlayground() {
     }, [savedTestCases])
 
     const displayContent = isStreaming ? streamedContent : input
+    const safeStringify = useCallback((value: unknown) => {
+        const seen = new WeakSet()
+        return JSON.stringify(value, (_key, val) => {
+            if (typeof val === 'object' && val !== null) {
+                if (seen.has(val)) return '[Circular]'
+                seen.add(val)
+            }
+            return val
+        }, 2)
+    }, [])
+
+    const renderDiagram = useCallback((node: ParsedNode | null) => {
+        if (!node) return null
+        const diagram = node.children.find(
+            (child) => typeof child !== 'string' && child.element === 'diagram'
+        ) as ParsedNode | undefined
+        if (!diagram) {
+            return <div className="text-zinc-500 text-sm">No diagram parsed yet.</div>
+        }
+
+        const nodes = diagram.children.filter(
+            (child) => typeof child !== 'string' && child.element === 'node'
+        ) as ParsedNode[]
+        const edges = diagram.children.filter(
+            (child) => typeof child !== 'string' && child.element === 'edge'
+        ) as ParsedNode[]
+
+        const radius = 140
+        const centerX = 220
+        const centerY = 180
+        const positions = nodes.map((nodeItem, index) => {
+            const angle = (index / Math.max(nodes.length, 1)) * Math.PI * 2
+            return {
+                id: nodeItem.children.join(''),
+                x: centerX + radius * Math.cos(angle),
+                y: centerY + radius * Math.sin(angle)
+            }
+        })
+
+        const positionMap = new Map(positions.map((pos) => [pos.id, pos]))
+
+        return (
+            <svg viewBox="0 0 440 360" className="w-full h-[260px]">
+                <defs>
+                    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#a1a1aa" />
+                    </marker>
+                </defs>
+                {edges.map((edge, index) => {
+                    const fromId = edge.children[0] as string
+                    const toId = edge.children[1] as string
+                    const from = positionMap.get(fromId)
+                    const to = positionMap.get(toId)
+                    if (!from || !to) return null
+                    return (
+                        <g key={`${fromId}-${toId}-${index}`}>
+                            <line
+                                x1={from.x}
+                                y1={from.y}
+                                x2={to.x}
+                                y2={to.y}
+                                stroke="#a1a1aa"
+                                strokeWidth="2"
+                                markerEnd="url(#arrow)"
+                            />
+                            {edge.attributes[0]?.label && (
+                                <text
+                                    x={(from.x + to.x) / 2}
+                                    y={(from.y + to.y) / 2 - 6}
+                                    fill="#e4e4e7"
+                                    fontSize="10"
+                                    textAnchor="middle"
+                                >
+                                    {edge.attributes[0].label}
+                                </text>
+                            )}
+                        </g>
+                    )
+                })}
+                {positions.map((pos) => (
+                    <g key={pos.id}>
+                        <circle cx={pos.x} cy={pos.y} r="20" fill="#27272a" stroke="#a78bfa" strokeWidth="2" />
+                        <text x={pos.x} y={pos.y + 4} textAnchor="middle" fill="#f4f4f5" fontSize="12">
+                            {pos.id}
+                        </text>
+                    </g>
+                ))}
+            </svg>
+        )
+    }, [])
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -720,6 +811,10 @@ export function TestPlayground() {
                         <div className="bg-white text-zinc-800 rounded-lg p-4 min-h-[200px]">
                             <MarkdownStreamRenderer content={displayContent} />
                         </div>
+                    ) : selectedConfig.renderer === 'diagram' ? (
+                        <div className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px]">
+                            {renderDiagram(parsedAST)}
+                        </div>
                     ) : (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">
                             {displayContent}
@@ -731,7 +826,7 @@ export function TestPlayground() {
                 <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
                     <h2 className="text-sm font-semibold text-zinc-400 mb-3">Parsed AST</h2>
                     <pre className="bg-zinc-950 text-emerald-400 font-mono text-xs p-4 rounded-lg overflow-auto max-h-96 border border-zinc-800">
-                        {parsedAST ? JSON.stringify(parsedAST, null, 2) : 'No content parsed'}
+                        {parsedAST ? safeStringify(parsedAST) : 'No content parsed'}
                     </pre>
                 </div>
             </div>
