@@ -70,11 +70,17 @@ export function TestPlayground() {
 
     const exampleConfigs = useMemo(() => {
         const jsonStateMap = new WeakMap<ParsedNode, {
-            stack: ParsedNode[]
+            stack: Array<{
+                node: ParsedNode
+                type: 'object' | 'array'
+                expectingKey: boolean
+                currentPair: ParsedNode | null
+            }>
             currentKey: string | null
             buffer: string
             inString: boolean
             isEscaped: boolean
+            stringValueTarget: 'key' | 'value' | null
         }>()
         const imageHandler: PatternHandler = {
             name: 'image',
@@ -134,30 +140,37 @@ export function TestPlayground() {
             feed: (char, node) => {
                 if (!jsonStateMap.has(node)) {
                     jsonStateMap.set(node, {
-                        stack: [node],
+                        stack: [],
                         currentKey: null,
                         buffer: '',
                         inString: false,
-                        isEscaped: false
+                        isEscaped: false,
+                        stringValueTarget: null
                     })
                 }
                 const state = jsonStateMap.get(node)!
 
+                const currentContainer = () => state.stack[state.stack.length - 1]
+
                 const flushBuffer = () => {
                     const value = state.buffer.trim()
                     if (!value) return
-                    const current = state.stack[state.stack.length - 1]
-                    if (current.element === 'object') {
-                        if (state.currentKey !== null) {
-                            current.children.push({
-                                element: 'pair',
-                                children: [state.currentKey, value],
-                                attributes: []
-                            })
-                            state.currentKey = null
-                        }
-                    } else if (current.element === 'array') {
-                        current.children.push(value)
+                    const container = currentContainer()
+                    if (!container) {
+                        state.buffer = ''
+                        return
+                    }
+                    const valueNode: ParsedNode = {
+                        element: 'value',
+                        children: [value],
+                        attributes: [{ type: 'primitive' }]
+                    }
+                    if (container.type === 'object' && container.currentPair) {
+                        container.currentPair.children[1] = valueNode
+                        container.currentPair = null
+                        container.expectingKey = true
+                    } else if (container.type === 'array') {
+                        container.node.children.push(valueNode)
                     }
                     state.buffer = ''
                 }
@@ -174,11 +187,47 @@ export function TestPlayground() {
                     }
                     if (char === '"') {
                         state.inString = false
-                        const current = state.stack[state.stack.length - 1]
-                        if (current.element === 'object' && state.currentKey === null) {
-                            state.currentKey = state.buffer
+                        const container = currentContainer()
+                        if (state.stringValueTarget === 'key' && container?.type === 'object') {
+                            const key = state.buffer
+                            const pair: ParsedNode = {
+                                element: 'pair',
+                                children: [
+                                    key,
+                                    {
+                                        element: 'value',
+                                        children: ['null'],
+                                        attributes: [{ type: 'null' }]
+                                    }
+                                ],
+                                attributes: []
+                            }
+                            container.node.children.push(pair)
+                            container.currentPair = pair
+                            container.expectingKey = false
+                            state.currentKey = key
                             state.buffer = ''
+                            state.stringValueTarget = null
+                            return false
                         }
+                        if (state.stringValueTarget === 'value' && container) {
+                            const valueNode: ParsedNode = {
+                                element: 'value',
+                                children: [state.buffer],
+                                attributes: [{ type: 'string' }]
+                            }
+                            if (container.type === 'object' && container.currentPair) {
+                                container.currentPair.children[1] = valueNode
+                                container.currentPair = null
+                                container.expectingKey = true
+                            } else if (container.type === 'array') {
+                                container.node.children.push(valueNode)
+                            }
+                            state.buffer = ''
+                            state.stringValueTarget = null
+                            return false
+                        }
+                        state.buffer = ''
                         return false
                     }
                     state.buffer += char
@@ -187,24 +236,46 @@ export function TestPlayground() {
 
                 if (char === '"') {
                     state.inString = true
+                    const container = currentContainer()
+                    if (container?.type === 'object' && container.expectingKey) {
+                        state.stringValueTarget = 'key'
+                    } else {
+                        state.stringValueTarget = 'value'
+                    }
                     return false
                 }
 
                 if (char === '{') {
                     flushBuffer()
                     const obj: ParsedNode = { element: 'object', children: [], attributes: [] }
-                    const current = state.stack[state.stack.length - 1]
-                    current.children.push(obj)
-                    state.stack.push(obj)
+                    const container = currentContainer()
+                    if (!container) {
+                        node.children.push(obj)
+                    } else if (container.type === 'object' && container.currentPair) {
+                        container.currentPair.children[1] = obj
+                        container.currentPair = null
+                        container.expectingKey = true
+                    } else if (container.type === 'array') {
+                        container.node.children.push(obj)
+                    }
+                    state.stack.push({ node: obj, type: 'object', expectingKey: true, currentPair: null })
                     return false
                 }
 
                 if (char === '[') {
                     flushBuffer()
                     const arr: ParsedNode = { element: 'array', children: [], attributes: [] }
-                    const current = state.stack[state.stack.length - 1]
-                    current.children.push(arr)
-                    state.stack.push(arr)
+                    const container = currentContainer()
+                    if (!container) {
+                        node.children.push(arr)
+                    } else if (container.type === 'object' && container.currentPair) {
+                        container.currentPair.children[1] = arr
+                        container.currentPair = null
+                        container.expectingKey = true
+                    } else if (container.type === 'array') {
+                        container.node.children.push(arr)
+                    }
+                    state.stack.push({ node: arr, type: 'array', expectingKey: false, currentPair: null })
                     return false
                 }
 
@@ -219,11 +290,23 @@ export function TestPlayground() {
 
                 if (char === ':' || char === ',') {
                     flushBuffer()
+                    const container = currentContainer()
+                    if (char === ',' && container?.type === 'object') {
+                        container.expectingKey = true
+                    }
                     return false
                 }
 
                 if (!/\s/.test(char)) {
                     state.buffer += char
+                    const container = currentContainer()
+                    if (container?.type === 'object' && container.currentPair) {
+                        container.currentPair.children[1] = {
+                            element: 'value',
+                            children: [state.buffer.trim()],
+                            attributes: [{ type: 'primitive' }]
+                        }
+                    }
                 }
 
                 return false
@@ -347,7 +430,7 @@ export function TestPlayground() {
                 name: 'Streaming JSON',
                 description: 'Incremental JSON collector with nested objects/arrays.',
                 input: '{\"user\":{\"id\":1,\"tags\":[\"alpha\",\"beta\"],\"ok\":true}}',
-                renderer: 'raw' as const,
+                renderer: 'json' as const,
                 createParser: () => new StreamParser([jsonHandler])
             },
             {
@@ -626,6 +709,69 @@ export function TestPlayground() {
         )
     }, [])
 
+    const renderJson = useCallback((node: ParsedNode | null) => {
+        if (!node) return 'No JSON parsed yet.'
+        const jsonNode = node.children.find(
+            (child) => typeof child !== 'string' && child.element === 'json'
+        ) as ParsedNode | undefined
+        if (!jsonNode || jsonNode.children.length === 0) return 'No JSON parsed yet.'
+
+        const buildValue = (valueNode: ParsedNode): unknown => {
+            if (valueNode.element === 'object') {
+                const obj: Record<string, unknown> = {}
+                for (const child of valueNode.children) {
+                    if (typeof child === 'string') continue
+                    if (child.element === 'pair') {
+                        const key = String(child.children[0] ?? '')
+                        const rawValue = child.children[1]
+                        if (typeof rawValue === 'string') {
+                            obj[key] = rawValue
+                        } else if (rawValue) {
+                            obj[key] = buildValue(rawValue)
+                        } else {
+                            obj[key] = null
+                        }
+                    }
+                }
+                return obj
+            }
+            if (valueNode.element === 'array') {
+                const arr: unknown[] = []
+                for (const child of valueNode.children) {
+                    if (typeof child === 'string') {
+                        arr.push(child)
+                    } else {
+                        arr.push(buildValue(child))
+                    }
+                }
+                return arr
+            }
+            if (valueNode.element === 'value') {
+                const raw = valueNode.children.join('')
+                const type = valueNode.attributes[0]?.type
+                if (type === 'null') return null
+                if (type === 'string') return raw
+                if (type === 'primitive') {
+                    if (raw === 'true') return true
+                    if (raw === 'false') return false
+                    if (raw === 'null') return null
+                    const asNumber = Number(raw)
+                    if (!Number.isNaN(asNumber)) return asNumber
+                    return raw
+                }
+                return raw
+            }
+            return valueNode.children.join('')
+        }
+
+        const rootValue = jsonNode.children.find(
+            (child) => typeof child !== 'string' && (child.element === 'object' || child.element === 'array')
+        ) as ParsedNode | undefined
+
+        if (!rootValue) return 'No JSON parsed yet.'
+        return JSON.stringify(buildValue(rootValue), null, 2)
+    }, [])
+
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left Panel - Input & Controls */}
@@ -815,6 +961,10 @@ export function TestPlayground() {
                         <div className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px]">
                             {renderDiagram(parsedAST)}
                         </div>
+                    ) : selectedConfig.renderer === 'json' ? (
+                        <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">
+                            {renderJson(parsedAST)}
+                        </pre>
                     ) : (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">
                             {displayContent}
