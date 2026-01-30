@@ -19,14 +19,16 @@ export const createJsonHandler = (): PatternHandler => {
 
     const buildPrimitiveNode = (raw: string): ParsedNode => {
         const trimmed = raw.trim()
-        if (trimmed === 'true' || trimmed === 'false') {
+        const booleanPrefixes = ['t', 'tr', 'tru', 'true', 'f', 'fa', 'fal', 'fals', 'false']
+        if (booleanPrefixes.includes(trimmed)) {
+            const value = trimmed.startsWith('f') ? 'false' : 'true'
             return {
                 element: 'value',
-                children: [trimmed],
+                children: [value],
                 attributes: [{ type: 'boolean' }]
             }
         }
-        if (trimmed === 'null') {
+        if (trimmed === 'n' || trimmed === 'nu' || trimmed === 'nul' || trimmed === 'null') {
             return {
                 element: 'value',
                 children: ['null'],

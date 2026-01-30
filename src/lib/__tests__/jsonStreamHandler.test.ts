@@ -49,6 +49,14 @@ const parseStream = (input: string): ParsedNode => {
     return getJsonNode(parser)
 }
 
+const parsePartial = (input: string): ParsedNode => {
+    const parser = new StreamParser([createJsonHandler()])
+    for (const char of input) {
+        parser.parse(char)
+    }
+    return getJsonNode(parser)
+}
+
 describe('json stream handler primitives', () => {
     test('streams booleans/nulls/numbers inside nested objects', () => {
         const root = parseStream('{"user":{"id":1,"tags":["alpha","beta"],"ok":true,"nil":null}}')
@@ -122,5 +130,19 @@ describe('json stream handler primitives', () => {
         const secondOk = getValueNode(findPair(second, 'ok'))
         expect(secondOk.attributes[0]?.type).toBe('boolean')
         expect(secondOk.children.join('')).toBe('false')
+    })
+
+    test('treats partial boolean tokens as booleans while streaming', () => {
+        const root = parsePartial('{"ok":tr')
+        const okValue = getValueNode(findPair(root, 'ok'))
+        expect(okValue.attributes[0]?.type).toBe('boolean')
+        expect(okValue.children.join('')).toBe('true')
+    })
+
+    test('treats partial false tokens as booleans while streaming', () => {
+        const root = parsePartial('{"ok":fal')
+        const okValue = getValueNode(findPair(root, 'ok'))
+        expect(okValue.attributes[0]?.type).toBe('boolean')
+        expect(okValue.children.join('')).toBe('false')
     })
 })
