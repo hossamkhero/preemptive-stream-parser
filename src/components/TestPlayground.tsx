@@ -610,6 +610,11 @@ export function TestPlayground() {
                 const raw = valueNode.children.join('')
                 const type = valueNode.attributes[0]?.type
                 if (type === 'null') return null
+                if (type === 'boolean') return raw === 'true'
+                if (type === 'number') {
+                    const asNumber = Number(raw)
+                    return Number.isNaN(asNumber) ? raw : asNumber
+                }
                 if (type === 'string') return raw
                 if (type === 'primitive') {
                     if (raw === 'true') return true

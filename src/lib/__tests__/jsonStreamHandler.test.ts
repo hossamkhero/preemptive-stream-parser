@@ -102,4 +102,25 @@ describe('json stream handler primitives', () => {
         expect(countValue.attributes[0]?.type).toBe('number')
         expect(countValue.children.join('')).toBe('0')
     })
+
+    test('streams nested arrays of objects with boolean flags', () => {
+        const root = parseStream('{"items":[{"id":1,"ok":true},{"id":2,"ok":false}]}')
+        const itemsValue = getValueNode(findPair(root, 'items'))
+        expect(itemsValue.element).toBe('array')
+
+        const itemNodes = itemsValue.children.filter((child): child is ParsedNode => typeof child !== 'string')
+        expect(itemNodes).toHaveLength(2)
+        const first = itemNodes[0]
+        const second = itemNodes[1]
+        expect(first.element).toBe('object')
+        expect(second.element).toBe('object')
+
+        const firstOk = getValueNode(findPair(first, 'ok'))
+        expect(firstOk.attributes[0]?.type).toBe('boolean')
+        expect(firstOk.children.join('')).toBe('true')
+
+        const secondOk = getValueNode(findPair(second, 'ok'))
+        expect(secondOk.attributes[0]?.type).toBe('boolean')
+        expect(secondOk.children.join('')).toBe('false')
+    })
 })
