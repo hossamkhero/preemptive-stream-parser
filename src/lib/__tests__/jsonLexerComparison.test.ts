@@ -39,6 +39,12 @@ const readValueNode = (node: JsonNode): JsonValue => {
         if (type === 'string') {
             return raw
         }
+        if (type === 'boolean') {
+            return raw === 'true'
+        }
+        if (type === 'number') {
+            return Number(raw)
+        }
         if (type === 'null') {
             return null
         }
@@ -86,34 +92,6 @@ const readLexerJson = (lexer: Lexer): JsonValue => {
     return merged
 }
 
-const normalizeLexerForStreamValue = (streamValue: JsonValue, lexerValue: JsonValue): JsonValue => {
-    if (Array.isArray(streamValue) && lexerValue && typeof lexerValue === 'object' && !Array.isArray(lexerValue)) {
-        const arrayValues = Object.values(lexerValue).filter(Array.isArray)
-        if (arrayValues.length === 1) {
-            return arrayValues[0]
-        }
-    }
-
-    if (
-        streamValue &&
-        typeof streamValue === 'object' &&
-        !Array.isArray(streamValue) &&
-        lexerValue &&
-        typeof lexerValue === 'object' &&
-        !Array.isArray(lexerValue)
-    ) {
-        const keys = Object.keys(lexerValue)
-        if (keys.length === 1) {
-            const soleValue = (lexerValue as Record<string, JsonValue>)[keys[0]]
-            if (soleValue && typeof soleValue === 'object' && !Array.isArray(soleValue)) {
-                return soleValue
-            }
-        }
-    }
-
-    return lexerValue
-}
-
 describe('JSON stream handler vs Lexer', () => {
     test('parses nested object values consistently', () => {
         const input = '{"user":{"id":1,"tags":["alpha","beta"],"ok":true,"meta":{"score":4.2,"active":false,"missing":null}}}'
@@ -129,7 +107,7 @@ describe('JSON stream handler vs Lexer', () => {
         }
 
         const streamValue = readStreamParserJson(streamParser)
-        const lexerValue = normalizeLexerForStreamValue(streamValue, readLexerJson(lexer))
+        const lexerValue = readLexerJson(lexer)
         expect(streamValue).toEqual(lexerValue)
     })
 
@@ -147,7 +125,7 @@ describe('JSON stream handler vs Lexer', () => {
         }
 
         const streamValue = readStreamParserJson(streamParser)
-        const lexerValue = normalizeLexerForStreamValue(streamValue, readLexerJson(lexer))
+        const lexerValue = readLexerJson(lexer)
         expect(streamValue).toEqual(lexerValue)
     })
 

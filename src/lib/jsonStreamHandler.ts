@@ -5,8 +5,9 @@ export const createJsonHandler = (): PatternHandler => {
         stack: Array<{
             node: ParsedNode
             type: 'object' | 'array'
-            expectingKey: boolean
-            currentPair: ParsedNode | null
+            expectingKey?: boolean
+            expectingValue?: boolean
+            currentPair?: ParsedNode | null
         }>
         currentKey: string | null
         buffer: string
@@ -14,19 +15,58 @@ export const createJsonHandler = (): PatternHandler => {
         isEscaped: boolean
         stringValueTarget: 'key' | 'value' | null
     }>()
+    const pendingStartTokens: Array<'{' | '['> = []
+
+    const buildPrimitiveNode = (raw: string): ParsedNode => {
+        const trimmed = raw.trim()
+        if (trimmed === 'true' || trimmed === 'false') {
+            return {
+                element: 'value',
+                children: [trimmed],
+                attributes: [{ type: 'boolean' }]
+            }
+        }
+        if (trimmed === 'null') {
+            return {
+                element: 'value',
+                children: ['null'],
+                attributes: [{ type: 'null' }]
+            }
+        }
+        if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
+            return {
+                element: 'value',
+                children: [trimmed],
+                attributes: [{ type: 'number' }]
+            }
+        }
+        return {
+            element: 'value',
+            children: [trimmed],
+            attributes: [{ type: 'primitive' }]
+        }
+    }
 
     return {
         name: 'json',
         elementName: 'json',
         allowedNestings: [],
         start: (buffer) => {
-            if (buffer.endsWith('{') || buffer.endsWith('[')) return 'commit'
+            if (buffer.endsWith('{')) {
+                pendingStartTokens.push('{')
+                return 'commit'
+            }
+            if (buffer.endsWith('[')) {
+                pendingStartTokens.push('[')
+                return 'commit'
+            }
             return 'no'
         },
         prefixLength: () => 1,
         commit: () => '',
         feed: (char, node) => {
             if (!jsonStateMap.has(node)) {
+                const initialToken = pendingStartTokens.shift()
                 jsonStateMap.set(node, {
                     stack: [],
                     currentKey: null,
@@ -35,6 +75,16 @@ export const createJsonHandler = (): PatternHandler => {
                     isEscaped: false,
                     stringValueTarget: null
                 })
+                const state = jsonStateMap.get(node)!
+                if (initialToken === '{') {
+                    const obj: ParsedNode = { element: 'object', children: [], attributes: [] }
+                    node.children.push(obj)
+                    state.stack.push({ node: obj, type: 'object', expectingKey: true, currentPair: null })
+                } else if (initialToken === '[') {
+                    const arr: ParsedNode = { element: 'array', children: [], attributes: [] }
+                    node.children.push(arr)
+                    state.stack.push({ node: arr, type: 'array', expectingValue: true, currentPair: null })
+                }
             }
             const state = jsonStateMap.get(node)!
 
@@ -48,24 +98,36 @@ export const createJsonHandler = (): PatternHandler => {
                     state.buffer = ''
                     return
                 }
-                const valueNode: ParsedNode = {
-                    element: 'value',
-                    children: [value],
-                    attributes: [{ type: 'primitive' }]
-                }
+                const valueNode = buildPrimitiveNode(value)
                 if (container.type === 'object' && container.currentPair) {
                     container.currentPair.children[1] = valueNode
                     container.currentPair = null
                     container.expectingKey = true
                 } else if (container.type === 'array') {
-                    container.node.children.push(valueNode)
+                    const lastChild = container.node.children[container.node.children.length - 1]
+                    if (lastChild && typeof lastChild !== 'string' && lastChild.element === 'value') {
+                        lastChild.children = valueNode.children
+                        lastChild.attributes = valueNode.attributes
+                    } else {
+                        container.node.children.push(valueNode)
+                    }
                 }
                 state.buffer = ''
             }
 
             if (state.inString) {
                 if (state.isEscaped) {
-                    state.buffer += char
+                    const escapeMap: Record<string, string> = {
+                        n: '\n',
+                        t: '\t',
+                        r: '\r',
+                        b: '\b',
+                        f: '\f',
+                        '"': '"',
+                        '\\': '\\',
+                        '/': '/'
+                    }
+                    state.buffer += escapeMap[char] ?? char
                     state.isEscaped = false
                     return false
                 }
@@ -133,39 +195,41 @@ export const createJsonHandler = (): PatternHandler => {
                 return false
             }
 
-            if (char === '{') {
-                flushBuffer()
-                const obj: ParsedNode = { element: 'object', children: [], attributes: [] }
-                const container = currentContainer()
-                if (!container) {
-                    node.children.push(obj)
-                } else if (container.type === 'object' && container.currentPair) {
-                    container.currentPair.children[1] = obj
-                    container.currentPair = null
-                    container.expectingKey = true
-                } else if (container.type === 'array') {
-                    container.node.children.push(obj)
+                if (char === '{') {
+                    flushBuffer()
+                    const obj: ParsedNode = { element: 'object', children: [], attributes: [] }
+                    const container = currentContainer()
+                    if (!container) {
+                        node.children.push(obj)
+                    } else if (container.type === 'object' && container.currentPair) {
+                        container.currentPair.children[1] = obj
+                        container.currentPair = null
+                        container.expectingKey = true
+                    } else if (container.type === 'array') {
+                        container.node.children.push(obj)
+                        container.expectingValue = false
+                    }
+                    state.stack.push({ node: obj, type: 'object', expectingKey: true, currentPair: null })
+                    return false
                 }
-                state.stack.push({ node: obj, type: 'object', expectingKey: true, currentPair: null })
-                return false
-            }
 
-            if (char === '[') {
-                flushBuffer()
-                const arr: ParsedNode = { element: 'array', children: [], attributes: [] }
-                const container = currentContainer()
-                if (!container) {
-                    node.children.push(arr)
-                } else if (container.type === 'object' && container.currentPair) {
-                    container.currentPair.children[1] = arr
-                    container.currentPair = null
-                    container.expectingKey = true
-                } else if (container.type === 'array') {
-                    container.node.children.push(arr)
+                if (char === '[') {
+                    flushBuffer()
+                    const arr: ParsedNode = { element: 'array', children: [], attributes: [] }
+                    const container = currentContainer()
+                    if (!container) {
+                        node.children.push(arr)
+                    } else if (container.type === 'object' && container.currentPair) {
+                        container.currentPair.children[1] = arr
+                        container.currentPair = null
+                        container.expectingKey = true
+                    } else if (container.type === 'array') {
+                        container.node.children.push(arr)
+                        container.expectingValue = false
+                    }
+                    state.stack.push({ node: arr, type: 'array', expectingValue: true, currentPair: null })
+                    return false
                 }
-                state.stack.push({ node: arr, type: 'array', expectingKey: false, currentPair: null })
-                return false
-            }
 
             if (char === '}' || char === ']') {
                 flushBuffer()
@@ -176,23 +240,36 @@ export const createJsonHandler = (): PatternHandler => {
                 return false
             }
 
-            if (char === ':' || char === ',') {
-                flushBuffer()
-                const container = currentContainer()
-                if (char === ',' && container?.type === 'object') {
-                    container.expectingKey = true
+                if (char === ':' || char === ',') {
+                    flushBuffer()
+                    const container = currentContainer()
+                    if (char === ',' && container?.type === 'object') {
+                        container.expectingKey = true
+                    }
+                    if (char === ',' && container?.type === 'array') {
+                        container.expectingValue = true
+                    }
+                    return false
                 }
-                return false
-            }
 
             if (!/\s/.test(char)) {
                 state.buffer += char
                 const container = currentContainer()
                 if (container?.type === 'object' && container.currentPair) {
-                    container.currentPair.children[1] = {
-                        element: 'value',
-                        children: [state.buffer.trim()],
-                        attributes: [{ type: 'primitive' }]
+                    container.currentPair.children[1] = buildPrimitiveNode(state.buffer)
+                } else if (container?.type === 'array') {
+                    const nextNode = buildPrimitiveNode(state.buffer)
+                    if (container.expectingValue) {
+                        container.node.children.push(nextNode)
+                        container.expectingValue = false
+                    } else {
+                        const lastChild = container.node.children[container.node.children.length - 1]
+                        if (lastChild && typeof lastChild !== 'string' && lastChild.element === 'value') {
+                            lastChild.children = nextNode.children
+                            lastChild.attributes = nextNode.attributes
+                        } else {
+                            container.node.children.push(nextNode)
+                        }
                     }
                 }
             }
