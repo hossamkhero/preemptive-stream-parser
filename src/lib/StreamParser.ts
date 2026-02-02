@@ -29,12 +29,11 @@ export interface StreamParserOptions {
 export class StreamParser {
     buffer = "";
     private activePath: ActiveEntry[] = [];
-    private handlersMap: Map<string, PatternHandler>;
 
     public root: ParsedNode;
 
     constructor(private patterns: PatternHandler[], options: StreamParserOptions = {}) {
-        this.handlersMap = new Map(this.patterns.map((p) => [p.name, p]));
+
         this.root = {
             element: options.rootElement ?? "root",
             children: [],
@@ -202,6 +201,7 @@ export class StreamParser {
                 const handler = this.patterns[i];
 
                 const prefixLen = handler.prefixLength?.(this.buffer) ?? 0;
+                const triggerChar = prefixLen > 0 ? this.buffer.slice(-1) : '';
 
                 if (prefixLen > 0 && this.buffer.length > prefixLen) {
                     const textBeforePattern = this.buffer.slice(0, -prefixLen);
@@ -227,6 +227,12 @@ export class StreamParser {
                 if (initialNodeText) {
                     this.addTextToNode(newNode, initialNodeText);
                 }
+
+                // Call feed for the trigger character so handlers can initialize
+                if (triggerChar && handler.feed) {
+                    handler.feed(triggerChar, newNode, this);
+                }
+
                 committed = true;
                 break;
             }

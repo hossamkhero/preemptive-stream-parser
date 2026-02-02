@@ -19,6 +19,8 @@ export const createJsonHandler = (): PatternHandler => {
 
     const buildPrimitiveNode = (raw: string): ParsedNode => {
         const trimmed = raw.trim()
+
+        // Handle boolean prefixes
         const booleanPrefixes = ['t', 'tr', 'tru', 'true', 'f', 'fa', 'fal', 'fals', 'false']
         if (booleanPrefixes.includes(trimmed)) {
             const value = trimmed.startsWith('f') ? 'false' : 'true'
@@ -28,6 +30,8 @@ export const createJsonHandler = (): PatternHandler => {
                 attributes: [{ type: 'boolean' }]
             }
         }
+
+        // Handle null prefixes
         if (trimmed === 'n' || trimmed === 'nu' || trimmed === 'nul' || trimmed === 'null') {
             return {
                 element: 'value',
@@ -35,6 +39,70 @@ export const createJsonHandler = (): PatternHandler => {
                 attributes: [{ type: 'null' }]
             }
         }
+
+        // Handle numbers - including partial/incomplete numbers
+        // The Lexer treats incomplete numbers as valid numbers with their complete portion
+
+        // Check if it looks like a number (starts with digit, negative sign, or decimal)
+        if (/^-?[\d.]/.test(trimmed) || trimmed === '-') {
+            let numStr = trimmed
+
+            // Handle lone minus sign - Lexer shows 0
+            if (numStr === '-') {
+                return {
+                    element: 'value',
+                    children: ['0'],
+                    attributes: [{ type: 'number' }]
+                }
+            }
+
+            // Handle incomplete decimal (e.g., "3." -> "3")
+            // Remove trailing decimal point
+            if (numStr.endsWith('.')) {
+                numStr = numStr.slice(0, -1)
+            }
+
+            // Handle incomplete exponent (e.g., "1e", "1e+", "1e-" -> "1")
+            // Remove incomplete exponent notation
+            numStr = numStr.replace(/[eE][+-]?$/, '')
+
+            // If after cleanup we have a valid number, use it
+            if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(numStr)) {
+                return {
+                    element: 'value',
+                    children: [numStr],
+                    attributes: [{ type: 'number' }]
+                }
+            }
+
+            // If it's just digits (possibly with leading minus), treat as number
+            if (/^-?\d+$/.test(numStr)) {
+                return {
+                    element: 'value',
+                    children: [numStr],
+                    attributes: [{ type: 'number' }]
+                }
+            }
+
+            // Fallback for partial numbers - try to extract valid integer portion
+            const match = numStr.match(/^-?\d+/)
+            if (match) {
+                return {
+                    element: 'value',
+                    children: [match[0]],
+                    attributes: [{ type: 'number' }]
+                }
+            }
+
+            // If nothing valid, default to 0
+            return {
+                element: 'value',
+                children: ['0'],
+                attributes: [{ type: 'number' }]
+            }
+        }
+
+        // Complete number check (should rarely reach here now)
         if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed)) {
             return {
                 element: 'value',
@@ -42,6 +110,7 @@ export const createJsonHandler = (): PatternHandler => {
                 attributes: [{ type: 'number' }]
             }
         }
+
         return {
             element: 'value',
             children: [trimmed],
@@ -87,6 +156,11 @@ export const createJsonHandler = (): PatternHandler => {
                     node.children.push(arr)
                     state.stack.push({ node: arr, type: 'array', expectingValue: true, currentPair: null })
                 }
+                // If this is the trigger character that was already used for initialization,
+                // don't process it again as a nested structure
+                if (char === initialToken) {
+                    return false
+                }
             }
             const state = jsonStateMap.get(node)!
 
@@ -131,6 +205,23 @@ export const createJsonHandler = (): PatternHandler => {
                     }
                     state.buffer += escapeMap[char] ?? char
                     state.isEscaped = false
+                    // Update the streaming value after escape character
+                    const container = currentContainer()
+                    if (state.stringValueTarget === 'key' && container?.type === 'object' && container.currentPair) {
+                        container.currentPair.children[0] = state.buffer
+                    } else if (state.stringValueTarget === 'value' && container) {
+                        if (container.type === 'object' && container.currentPair) {
+                            const valueNode = container.currentPair.children[1]
+                            if (typeof valueNode !== 'string' && valueNode.attributes?.[0]?.type === 'string') {
+                                valueNode.children = [state.buffer]
+                            }
+                        } else if (container.type === 'array') {
+                            const lastChild = container.node.children[container.node.children.length - 1]
+                            if (typeof lastChild !== 'string' && lastChild.attributes?.[0]?.type === 'string') {
+                                lastChild.children = [state.buffer]
+                            }
+                        }
+                    }
                     return false
                 }
                 if (char === '\\') {
@@ -138,42 +229,22 @@ export const createJsonHandler = (): PatternHandler => {
                     return false
                 }
                 if (char === '"') {
+                    // Closing quote - finalize the string
                     state.inString = false
                     const container = currentContainer()
-                    if (state.stringValueTarget === 'key' && container?.type === 'object') {
-                        const key = state.buffer
-                        const pair: ParsedNode = {
-                            element: 'pair',
-                            children: [
-                                key,
-                                {
-                                    element: 'value',
-                                    children: ['null'],
-                                    attributes: [{ type: 'null' }]
-                                }
-                            ],
-                            attributes: []
-                        }
-                        container.node.children.push(pair)
-                        container.currentPair = pair
+                    if (state.stringValueTarget === 'key' && container?.type === 'object' && container.currentPair) {
+                        // Key is already created and updated, just finalize
+                        state.currentKey = state.buffer
                         container.expectingKey = false
-                        state.currentKey = key
                         state.buffer = ''
                         state.stringValueTarget = null
                         return false
                     }
                     if (state.stringValueTarget === 'value' && container) {
-                        const valueNode: ParsedNode = {
-                            element: 'value',
-                            children: [state.buffer],
-                            attributes: [{ type: 'string' }]
-                        }
+                        // Value is already created and updated, just finalize
                         if (container.type === 'object' && container.currentPair) {
-                            container.currentPair.children[1] = valueNode
                             container.currentPair = null
                             container.expectingKey = true
-                        } else if (container.type === 'array') {
-                            container.node.children.push(valueNode)
                         }
                         state.buffer = ''
                         state.stringValueTarget = null
@@ -182,7 +253,26 @@ export const createJsonHandler = (): PatternHandler => {
                     state.buffer = ''
                     return false
                 }
+                // Regular character - add to buffer and update streaming value
                 state.buffer += char
+                const container = currentContainer()
+                if (state.stringValueTarget === 'key' && container?.type === 'object' && container.currentPair) {
+                    // Update the key progressively
+                    container.currentPair.children[0] = state.buffer
+                } else if (state.stringValueTarget === 'value' && container) {
+                    // Update the string value progressively
+                    if (container.type === 'object' && container.currentPair) {
+                        const valueNode = container.currentPair.children[1]
+                        if (typeof valueNode !== 'string' && valueNode.attributes?.[0]?.type === 'string') {
+                            valueNode.children = [state.buffer]
+                        }
+                    } else if (container.type === 'array') {
+                        const lastChild = container.node.children[container.node.children.length - 1]
+                        if (typeof lastChild !== 'string' && lastChild.attributes?.[0]?.type === 'string') {
+                            lastChild.children = [state.buffer]
+                        }
+                    }
+                }
                 return false
             }
 
@@ -190,48 +280,74 @@ export const createJsonHandler = (): PatternHandler => {
                 state.inString = true
                 const container = currentContainer()
                 if (container?.type === 'object' && container.expectingKey) {
+                    // Starting a key string - create the pair immediately with empty key
                     state.stringValueTarget = 'key'
+                    const pair: ParsedNode = {
+                        element: 'pair',
+                        children: [
+                            '', // Empty key initially, will be updated as characters come in
+                            {
+                                element: 'value',
+                                children: ['null'],
+                                attributes: [{ type: 'null' }]
+                            }
+                        ],
+                        attributes: []
+                    }
+                    container.node.children.push(pair)
+                    container.currentPair = pair
                 } else {
+                    // Starting a value string - create the value node immediately
                     state.stringValueTarget = 'value'
+                    const valueNode: ParsedNode = {
+                        element: 'value',
+                        children: [''], // Empty string initially
+                        attributes: [{ type: 'string' }]
+                    }
+                    if (container?.type === 'object' && container.currentPair) {
+                        container.currentPair.children[1] = valueNode
+                    } else if (container?.type === 'array') {
+                        container.node.children.push(valueNode)
+                    }
                 }
                 return false
             }
 
-                if (char === '{') {
-                    flushBuffer()
-                    const obj: ParsedNode = { element: 'object', children: [], attributes: [] }
-                    const container = currentContainer()
-                    if (!container) {
-                        node.children.push(obj)
-                    } else if (container.type === 'object' && container.currentPair) {
-                        container.currentPair.children[1] = obj
-                        container.currentPair = null
-                        container.expectingKey = true
-                    } else if (container.type === 'array') {
-                        container.node.children.push(obj)
-                        container.expectingValue = false
-                    }
-                    state.stack.push({ node: obj, type: 'object', expectingKey: true, currentPair: null })
-                    return false
+            if (char === '{') {
+                flushBuffer()
+                const obj: ParsedNode = { element: 'object', children: [], attributes: [] }
+                const container = currentContainer()
+                if (!container) {
+                    node.children.push(obj)
+                } else if (container.type === 'object' && container.currentPair) {
+                    container.currentPair.children[1] = obj
+                    container.currentPair = null
+                    container.expectingKey = true
+                } else if (container.type === 'array') {
+                    container.node.children.push(obj)
+                    container.expectingValue = false
                 }
+                state.stack.push({ node: obj, type: 'object', expectingKey: true, currentPair: null })
+                return false
+            }
 
-                if (char === '[') {
-                    flushBuffer()
-                    const arr: ParsedNode = { element: 'array', children: [], attributes: [] }
-                    const container = currentContainer()
-                    if (!container) {
-                        node.children.push(arr)
-                    } else if (container.type === 'object' && container.currentPair) {
-                        container.currentPair.children[1] = arr
-                        container.currentPair = null
-                        container.expectingKey = true
-                    } else if (container.type === 'array') {
-                        container.node.children.push(arr)
-                        container.expectingValue = false
-                    }
-                    state.stack.push({ node: arr, type: 'array', expectingValue: true, currentPair: null })
-                    return false
+            if (char === '[') {
+                flushBuffer()
+                const arr: ParsedNode = { element: 'array', children: [], attributes: [] }
+                const container = currentContainer()
+                if (!container) {
+                    node.children.push(arr)
+                } else if (container.type === 'object' && container.currentPair) {
+                    container.currentPair.children[1] = arr
+                    container.currentPair = null
+                    container.expectingKey = true
+                } else if (container.type === 'array') {
+                    container.node.children.push(arr)
+                    container.expectingValue = false
                 }
+                state.stack.push({ node: arr, type: 'array', expectingValue: true, currentPair: null })
+                return false
+            }
 
             if (char === '}' || char === ']') {
                 flushBuffer()
@@ -242,17 +358,17 @@ export const createJsonHandler = (): PatternHandler => {
                 return false
             }
 
-                if (char === ':' || char === ',') {
-                    flushBuffer()
-                    const container = currentContainer()
-                    if (char === ',' && container?.type === 'object') {
-                        container.expectingKey = true
-                    }
-                    if (char === ',' && container?.type === 'array') {
-                        container.expectingValue = true
-                    }
-                    return false
+            if (char === ':' || char === ',') {
+                flushBuffer()
+                const container = currentContainer()
+                if (char === ',' && container?.type === 'object') {
+                    container.expectingKey = true
                 }
+                if (char === ',' && container?.type === 'array') {
+                    container.expectingValue = true
+                }
+                return false
+            }
 
             if (!/\s/.test(char)) {
                 state.buffer += char
