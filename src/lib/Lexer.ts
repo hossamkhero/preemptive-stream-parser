@@ -67,7 +67,7 @@ const TOKEN_NUMBER_8 = 43 as const; // 8
 const TOKEN_NUMBER_9 = 44 as const; // 9
 const TOKEN_OTHERS = 45 as const; // anything else in json
 
-type Token = typeof TOKEN_EOF | typeof TOKEN_IGNORED | typeof TOKEN_LEFT_BRACKET | 
+type Token = typeof TOKEN_EOF | typeof TOKEN_IGNORED | typeof TOKEN_LEFT_BRACKET |
   typeof TOKEN_RIGHT_BRACKET | typeof TOKEN_LEFT_BRACE | typeof TOKEN_RIGHT_BRACE |
   typeof TOKEN_COLON | typeof TOKEN_DOT | typeof TOKEN_COMMA | typeof TOKEN_QUOTE |
   typeof TOKEN_ESCAPE_CHARACTER | typeof TOKEN_SLASH | typeof TOKEN_NEGATIVE |
@@ -217,7 +217,7 @@ function matchStack(stack: Token[], tokens: Token[]): boolean {
   let pointer = arrayLength(stack);
   let tokensLeft = arrayLength(tokens);
 
-  for (;;) {
+  for (; ;) {
     tokensLeft--;
     pointer--;
 
@@ -667,7 +667,7 @@ class Lexer {
   // this method will traversal all token and generate mirror token for complete full JSON
   private AppendString(str: string): void {
     this.JSONSegment = str;
-    for (;;) {
+    for (; ;) {
       let [token, tokenSymbol] = this.matchToken();
 
       switch (token) {
@@ -1558,7 +1558,7 @@ class Lexer {
     this.MirrorTokenStack = [];
     this.completedSections = [];
   }
-private splitTopLevelObjects(s: string) {
+  private splitTopLevelObjects(s: string) {
     const out = [];
     let start = -1;
     let depth = 0;
@@ -1566,50 +1566,51 @@ private splitTopLevelObjects(s: string) {
     let esc = false;
 
     for (let i = 0; i < s.length; i++) {
-        const ch = s[i];
+      const ch = s[i];
 
-        if (depth === 0) {
+      if (depth === 0) {
         if (ch === '{') {
-            start = i;
-            depth = 1;
+          start = i;
+          depth = 1;
         }
         continue;
-        }
+      }
 
-        if (inStr) {
+      if (inStr) {
         if (esc) {
-            esc = false;
+          esc = false;
         } else if (ch === '\\') {
-            esc = true;
+          esc = true;
         } else if (ch === '"') {
-            inStr = false;
+          inStr = false;
         }
-        } else {
+      } else {
         if (ch === '"') {
-            inStr = true;
-            esc = false;
+          inStr = true;
+          esc = false;
         } else if (ch === '{') {
-            depth++;
+          depth++;
         } else if (ch === '}') {
-            depth--;
-            if (depth === 0) {
+          depth--;
+          if (depth === 0) {
             out.push(s.slice(start, i + 1));
             start = -1;
-            }
+          }
         }
-        }
+      }
     }
     return out;
-}
-    // Example
-    // console.log(splitTopLevelObjects('{"hey": 2}{"man": 3}'));
-    // -> ['{"hey": 2}', '{"man": 3}']
+  }
+  // Example
+  // console.log(splitTopLevelObjects('{"hey": 2}{"man": 3}'));
+  // -> ['{"hey": 2}', '{"man": 3}']
   getCompletedSections(): any[] {
     // For LexicalParser, we need to parse the JSON and extract sections like JSONStreamParser
     if (this.JSONContent.trim()) {
       try {
+        // const completedJSON = this.CompleteJSON();
+        // Debug: console.log('lexical parser completedJSON', completedJSON);
         const completedJSON = this.CompleteJSON();
-        console.log('lexical parser completedJSON', completedJSON);
 
         // const parsed = JSON.parse(completedJSON);
         // console.log('lexical parser parsed', parsed);
@@ -1627,7 +1628,7 @@ private splitTopLevelObjects(s: string) {
             sections.push(section);
           });
         });
-        
+
         return sections;
       } catch (error) {
         // If JSON is incomplete or malformed, try to extract what we can
