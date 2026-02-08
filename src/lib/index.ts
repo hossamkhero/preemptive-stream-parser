@@ -11,3 +11,31 @@ export * from './handlers'
 export { composeHandlers, createMarkdownParser, createStreamParser } from './extensions'
 export type { HandlerExtension, HandlerPlacement } from './extensions'
 export { createJsonHandler } from './jsonStreamHandler'
+export {
+  StreamParser as ExperimentalStreamParser,
+  MarkdownStreamParser as ExperimentalMarkdownStreamParser,
+  experimentalHandlers as experimentalHandlersExperimental,
+  headingHandlers,
+  createHeadingHandler,
+  strongHandler,
+  emphasisHandler,
+  codeHandler,
+  linkHandler,
+  unorderedListHandler,
+  orderedListHandler,
+  blockquoteHandler,
+  horizontalRuleHandler,
+  tableHandler
+} from './experimental-v2'
+export type {
+  FinalizeContext,
+  StartContext,
+  StepResult,
+  StepControl,
+  StepContext,
+  ParsedNode as ExperimentalParsedNode,
+  PatternHandler as ExperimentalPatternHandler,
+  StartResult,
+  StreamParserOptions as ExperimentalStreamParserOptions,
+  Writer
+} from './experimental-v2'
