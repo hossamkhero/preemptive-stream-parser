@@ -1,9 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
-import { MarkdownStreamParser, ParsedMDNode } from '../lib/MDStreamParser';
+import { useState, useEffect } from 'react';
+import {
+    MarkdownStreamParser,
+    ExperimentalMarkdownStreamParser,
+    type ParsedMDNode,
+    type ExperimentalParsedNode
+} from '../lib';
 
 interface MarkdownStreamRendererProps {
     content?: string | null;
+    engine?: 'stable' | 'experimental-v2';
 }
+
+type RenderNode = ParsedMDNode | ExperimentalParsedNode;
+type RenderAttributes = RenderNode['attributes'];
 
 // Utility function to unescape common escaped characters
 const unescapeContent = (content?: string | null): string => {
@@ -19,16 +28,26 @@ const unescapeContent = (content?: string | null): string => {
         .replace(/\\f/g, '\f');      // Unescape form feed
 };
 
-const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode => {
+const getNodeProps = (attributes: RenderAttributes): Record<string, any> => {
+    if (Array.isArray(attributes)) {
+        return attributes.reduce<Record<string, any>>(
+            (acc, attr) => ({ ...acc, ...attr }),
+            {}
+        );
+    }
+    return attributes;
+};
+
+const renderNode = (node: RenderNode | string, key: string): React.ReactNode => {
     if (typeof node === 'string') {
         return node;
     }
 
     const { element, children, attributes } = node;
-    const props = attributes.reduce<Record<string, any>>((acc: Record<string, any>, attr: Record<string, any>) => ({ ...acc, ...attr }), {} as Record<string, any>);
+    const props = getNodeProps(attributes);
 
     // Simple helper to render children, filtering out whitespace-only strings
-    const renderChildren = (kids: (ParsedMDNode | string)[], keyPrefix: string): React.ReactNode[] => {
+    const renderChildren = (kids: (RenderNode | string)[], keyPrefix: string): React.ReactNode[] => {
         return kids
             .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
             .map((child, idx) => renderNode(child, `${keyPrefix}-${idx}`));
@@ -73,7 +92,7 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
                 <ul key={key} className="list-disc list-inside ml-1 space-y-1 mb-4" {...props}>
                     {children
                         .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
-                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-ulchild-${cidx}`))}
+                        .map((child: RenderNode | string, cidx: number) => renderNode(child, `${key}-ulchild-${cidx}`))}
                 </ul>
             );
         case 'ol':
@@ -82,7 +101,7 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
                 <ol key={key} className="list-decimal list-inside ml-1 space-y-1 mb-4" {...props}>
                     {children
                         .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
-                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-olchild-${cidx}`))}
+                        .map((child: RenderNode | string, cidx: number) => renderNode(child, `${key}-olchild-${cidx}`))}
                 </ol>
             );
         case 'li':
@@ -91,7 +110,7 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
                 <li key={key} className="text-gray-800 leading-relaxed break-words" {...props}>
                     {children
                         .filter((child) => typeof child !== 'string' || !/^\s*$/.test(child as string))
-                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-lichild-${cidx}`))}
+                        .map((child: RenderNode | string, cidx: number) => renderNode(child, `${key}-lichild-${cidx}`))}
                 </li>
             );
         case 'blockquote':
@@ -106,7 +125,7 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
                     <table className="min-w-full border-collapse border border-gray-200 text-xs" {...props}>
                         {children
                             .filter((child) => typeof child !== 'string')
-                            .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-tablec-${cidx}`))}
+                            .map((child: RenderNode | string, cidx: number) => renderNode(child, `${key}-tablec-${cidx}`))}
                     </table>
                 </div>
             );
@@ -115,7 +134,7 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
                 <thead key={key} className="bg-gray-50" {...props}>
                     {children
                         .filter((child) => typeof child !== 'string')
-                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-theadc-${cidx}`))}
+                        .map((child: RenderNode | string, cidx: number) => renderNode(child, `${key}-theadc-${cidx}`))}
                 </thead>
             );
         case 'tbody':
@@ -123,14 +142,14 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
                 <tbody key={key} className="divide-y divide-gray-200" {...props}>
                     {children
                         .filter((child) => typeof child !== 'string')
-                        .map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-tbodyc-${cidx}`))}
+                        .map((child: RenderNode | string, cidx: number) => renderNode(child, `${key}-tbodyc-${cidx}`))}
                 </tbody>
             );
         case 'tr':
             // Filter out empty cells (cells with only whitespace content)
             const filteredCells = children.filter((child) => {
                 if (typeof child === 'string') return false;
-                const cell = child as ParsedMDNode;
+                const cell = child as RenderNode;
                 if (cell.element !== 'td' && cell.element !== 'th') return true;
                 const cellText = cell.children.join('').trim();
                 return cellText.length > 0;
@@ -139,7 +158,7 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
             if (filteredCells.length === 0) return null;
             return (
                 <tr key={key} className="hover:bg-gray-50 transition-colors" {...props}>
-                    {filteredCells.map((child: ParsedMDNode | string, cidx: number) => renderNode(child, `${key}-trc-${cidx}`))}
+                    {filteredCells.map((child: RenderNode | string, cidx: number) => renderNode(child, `${key}-trc-${cidx}`))}
                 </tr>
             );
         case 'th':
@@ -159,23 +178,23 @@ const renderNode = (node: ParsedMDNode | string, key: string): React.ReactNode =
     }
 };
 
-export const MarkdownStreamRenderer: React.FC<MarkdownStreamRendererProps> = ({ content }) => {
-    const [parsedTree, setParsedTree] = useState<ParsedMDNode | null>(null);
-
-    const parser = useRef<MarkdownStreamParser>(new MarkdownStreamParser());
+export const MarkdownStreamRenderer: React.FC<MarkdownStreamRendererProps> = ({
+    content,
+    engine = 'stable'
+}) => {
+    const [parsedTree, setParsedTree] = useState<RenderNode | null>(null);
 
     useEffect(() => {
-        parser.current.clearAllStates();
+        const parser =
+            engine === 'experimental-v2'
+                ? new ExperimentalMarkdownStreamParser()
+                : new MarkdownStreamParser();
 
         // Clean the escaped content before parsing
         const cleanedContent = unescapeContent(content);
-        parser.current.parse(cleanedContent);
-        setParsedTree(parser.current.root);
-
-        return () => {
-            parser.current.clearAllStates();
-        }
-    }, [content]);
+        parser.parse(cleanedContent);
+        setParsedTree(parser.root as RenderNode);
+    }, [content, engine]);
 
     if (!parsedTree) {
         return null;

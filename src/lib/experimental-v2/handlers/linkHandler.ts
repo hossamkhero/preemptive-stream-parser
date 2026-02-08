@@ -1,8 +1,6 @@
 import type { PatternHandler } from '../types';
 
-type LinkSeed = {
-	initialChar: string;
-};
+type LinkSeed = {};
 
 type LinkState = {
 	phase: 'text' | 'between' | 'url';
@@ -14,19 +12,24 @@ export const linkHandler: PatternHandler<LinkState, LinkSeed> = {
 	allowedNestings: ['strong', 'em', 'code'],
 
 	start(buffer: string) {
-		if (buffer.endsWith('[')) {
+		if (!buffer.startsWith('[')) {
+			return { kind: 'no' };
+		}
+
+		if (buffer.length === 1) {
 			return { kind: 'potential' };
 		}
-		if (/\[[^\s]$/.test(buffer)) {
-			const initialChar = buffer[buffer.length - 1];
-			return {
-				kind: 'commit',
-				seed: { initialChar },
-				initialText: initialChar,
-				consumed: 2
-			};
+
+		const firstLabelChar = buffer[1];
+		if (/\s/.test(firstLabelChar)) {
+			return { kind: 'no' };
 		}
-		return { kind: 'no' };
+
+		return {
+			kind: 'commit',
+			seed: {},
+			consumed: 1
+		};
 	},
 
 	createState() {
@@ -45,6 +48,11 @@ export const linkHandler: PatternHandler<LinkState, LinkSeed> = {
 				return false;
 			}
 
+			if (char === '\n') {
+				control.preventConsume();
+				return true;
+			}
+
 			if (char === '*' || char === '_' || char === '`') {
 				control.preventConsume();
 				return false;
@@ -59,6 +67,8 @@ export const linkHandler: PatternHandler<LinkState, LinkSeed> = {
 				state.phase = 'url';
 				return false;
 			}
+
+			control.preventConsume();
 			return true;
 		}
 
@@ -67,8 +77,12 @@ export const linkHandler: PatternHandler<LinkState, LinkSeed> = {
 			return true;
 		}
 
+		if (char === '\n') {
+			control.preventConsume();
+			return true;
+		}
+
 		state.urlBuffer += char;
 		return false;
 	}
 };
-

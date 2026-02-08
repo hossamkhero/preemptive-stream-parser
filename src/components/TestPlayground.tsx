@@ -3,6 +3,7 @@ import {
     createMarkdownParser,
     createJsonHandler,
     StreamParser,
+    ExperimentalMarkdownStreamParser,
     type ParsedNode,
     type PatternHandler,
     type HandlerExtension
@@ -15,6 +16,8 @@ interface TestCase {
     input: string
     description?: string
 }
+
+type MarkdownEngine = 'stable' | 'experimental-v2'
 
 const EXAMPLE_MARKDOWN = `# Hello World
 
@@ -56,10 +59,11 @@ export function TestPlayground() {
     const [streamSpeed, setStreamSpeed] = useState(50) // ticks per second
     const [burstSize, setBurstSize] = useState(1)
     const [burstMode, setBurstMode] = useState<'chars' | 'words'>('chars')
-    const [parsedAST, setParsedAST] = useState<ParsedNode | null>(null)
+    const [parsedAST, setParsedAST] = useState<unknown>(null)
     const [savedTestCases, setSavedTestCases] = useState<TestCase[]>([])
     const [testCaseName, setTestCaseName] = useState('')
     const [selectedExample, setSelectedExample] = useState('markdown')
+    const [markdownEngine, setMarkdownEngine] = useState<MarkdownEngine>('stable')
 
     const streamIntervalRef = useRef<number | null>(null)
     const charIndexRef = useRef(0)
@@ -223,11 +227,17 @@ export function TestPlayground() {
         return [
             {
                 id: 'markdown',
-                name: 'Markdown (with images)',
-                description: 'Markdown parser extended with image tokens.',
+                name: markdownEngine === 'stable' ? 'Markdown (stable + images)' : 'Markdown (experimental v2)',
+                description:
+                    markdownEngine === 'stable'
+                        ? 'Stable markdown parser with image extension enabled.'
+                        : 'Experimental v2 markdown parser (state-machine handlers).',
                 input: EXAMPLE_MARKDOWN,
                 renderer: 'markdown' as const,
-                createParser: () => createMarkdownParser([imageExtension])
+                createParser: () =>
+                    markdownEngine === 'stable'
+                        ? createMarkdownParser([imageExtension])
+                        : new ExperimentalMarkdownStreamParser()
             },
             {
                 id: 'json',
@@ -246,7 +256,7 @@ export function TestPlayground() {
                 createParser: () => new StreamParser([diagramHandler])
             }
         ]
-    }, [])
+    }, [markdownEngine])
 
     const selectedConfig = exampleConfigs.find((example) => example.id === selectedExample) ?? exampleConfigs[0]
 
@@ -256,7 +266,7 @@ export function TestPlayground() {
         charIndexRef.current = 0
         setIsStreaming(false)
         setIsPaused(false)
-    }, [selectedConfig])
+    }, [selectedConfig.input, selectedExample])
 
     // Load saved test cases from localStorage
     useEffect(() => {
@@ -275,7 +285,7 @@ export function TestPlayground() {
         const parser = selectedConfig.createParser()
         const content = isStreaming ? streamedContent : input
         parser.parse(content)
-        setParsedAST(parser.root)
+        setParsedAST(parser.root as unknown)
     }, [input, streamedContent, isStreaming, selectedConfig])
 
     const clearStreamInterval = useCallback(() => {
@@ -729,19 +739,34 @@ export function TestPlayground() {
                     <div className="flex items-center justify-between mb-3 gap-3">
                         <div>
                             <h2 className="text-sm font-semibold text-zinc-400">Input</h2>
-                            <p className="text-xs text-zinc-500">{selectedConfig.description}</p>
+                            <p className="text-xs text-zinc-500">
+                                {selectedConfig.description}
+                                {selectedExample === 'markdown' ? ` | engine: ${markdownEngine}` : ''}
+                            </p>
                         </div>
-                        <select
-                            value={selectedExample}
-                            onChange={(e) => setSelectedExample(e.target.value)}
-                            className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
-                        >
-                            {exampleConfigs.map((example) => (
-                                <option key={example.id} value={example.id}>
-                                    {example.name}
-                                </option>
-                            ))}
-                        </select>
+                        <div className="flex items-center gap-2">
+                            {selectedExample === 'markdown' && (
+                                <select
+                                    value={markdownEngine}
+                                    onChange={(e) => setMarkdownEngine(e.target.value as MarkdownEngine)}
+                                    className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
+                                >
+                                    <option value="stable">Stable</option>
+                                    <option value="experimental-v2">Experimental v2</option>
+                                </select>
+                            )}
+                            <select
+                                value={selectedExample}
+                                onChange={(e) => setSelectedExample(e.target.value)}
+                                className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
+                            >
+                                {exampleConfigs.map((example) => (
+                                    <option key={example.id} value={example.id}>
+                                        {example.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                     <textarea
                         value={input}
@@ -820,15 +845,15 @@ export function TestPlayground() {
                     <h2 className="text-sm font-semibold text-zinc-400 mb-3">Rendered Output</h2>
                     {selectedConfig.renderer === 'markdown' ? (
                         <div className="bg-white text-zinc-800 rounded-lg p-4 min-h-[200px]">
-                            <MarkdownStreamRenderer content={displayContent} />
+                            <MarkdownStreamRenderer content={displayContent} engine={markdownEngine} />
                         </div>
                     ) : selectedConfig.renderer === 'diagram' ? (
                         <div className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px]">
-                            <DiagramCanvas model={buildDiagramModel(parsedAST)} />
+                            <DiagramCanvas model={buildDiagramModel(parsedAST as ParsedNode | null)} />
                         </div>
                     ) : selectedConfig.renderer === 'json' ? (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">
-                            {renderJson(parsedAST)}
+                            {renderJson(parsedAST as ParsedNode | null)}
                         </pre>
                     ) : (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">

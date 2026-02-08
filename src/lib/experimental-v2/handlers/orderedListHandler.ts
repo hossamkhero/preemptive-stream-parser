@@ -1,11 +1,11 @@
 import type { PatternHandler } from '../types';
-import { appendText } from './lineUtils';
+import { appendText } from './utils/lineUtils';
 import {
 	createListItem,
 	getCurrentListItem,
 	getLastListInParent,
 	isInsideListElement
-} from './listUtils';
+} from './utils/listUtils';
 
 type OrderedListSeed = {};
 
@@ -105,4 +105,3 @@ export const orderedListHandler: PatternHandler<OrderedListState, OrderedListSee
 		return false;
 	}
 };
-

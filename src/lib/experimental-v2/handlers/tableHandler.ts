@@ -49,7 +49,7 @@ export const tableHandler: PatternHandler<TableState, TableSeed> = {
 	},
 
 	step(ctx) {
-		const { char, node, state } = ctx;
+		const { char, node, state, control } = ctx;
 
 		const processChar = (inputChar: string): void => {
 			const row = state.currentRow as ParsedNode;
@@ -78,6 +78,13 @@ export const tableHandler: PatternHandler<TableState, TableSeed> = {
 			currentCell.children[0] = currentText + inputChar;
 			state.afterPipe = false;
 		};
+
+		// A new table row must start with '|'. If the next line starts with anything else,
+		// close this table and let the parent/parser handle that character.
+		if (!state.isConfirmed && state.rowBuffer.length === 0 && char !== '|') {
+			control.preventConsume();
+			return true;
+		}
 
 		if (char === '\n') {
 			if (!state.isConfirmed) {

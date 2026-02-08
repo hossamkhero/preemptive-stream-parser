@@ -1,56 +1,43 @@
 import type { PatternHandler } from '../types';
+import {
+	startAtLineStart,
+	stepLineTextWithInlineHandoff
+} from './utils/lineBlockUtils';
 
-type HeadingSeed = {};
+type HeadingSeed = {
+	level: number;
+};
 type HeadingState = {};
 
 const INLINE_ALLOWED = ['strong', 'em', 'code', 'a'];
 
-export const createHeadingHandler = (level: number): PatternHandler<HeadingState, HeadingSeed> => {
-	const prefix = '#'.repeat(level);
+export const headingHandler: PatternHandler<HeadingState, HeadingSeed> = {
+	elementName: 'heading',
+	allowedNestings: INLINE_ALLOWED,
 
-	return {
-		elementName: `h${level}`,
-		allowedNestings: INLINE_ALLOWED,
+	start(buffer: string, context) {
+		return startAtLineStart<HeadingSeed>(context, () => {
+			if (/^#{1,6}$/.test(buffer)) {
+				return { kind: 'potential' };
+			}
 
-		start(buffer: string, context) {
-			if (!context.lineStart) {
+			const match = /^(#{1,6}) $/.exec(buffer);
+			if (!match) {
 				return { kind: 'no' };
 			}
 
-			if (buffer === prefix) {
-				return { kind: 'potential' };
-			}
-			if (buffer === `${prefix} `) {
-				return { kind: 'commit', seed: {}, consumed: prefix.length + 1 };
-			}
-			return { kind: 'no' };
-		},
+			return {
+				kind: 'commit',
+				seed: { level: match[1].length },
+				consumed: match[1].length + 1
+			};
+		});
+	},
 
-		createState() {
-			return {};
-		},
+	createState(seed, _parser, node) {
+		node.element = `h${seed.level}`;
+		return {};
+	},
 
-		step(ctx) {
-			const { char, writer, control } = ctx;
-
-			if (char === '\n') {
-				control.preventConsume();
-				return true;
-			}
-
-			if (char === '*' || char === '_' || char === '`' || char === '[') {
-				control.preventConsume();
-				return false;
-			}
-
-			writer.text(char);
-			return false;
-		}
-	};
+	step: stepLineTextWithInlineHandoff
 };
-
-export const headingHandlers: PatternHandler<any, any>[] = Array.from(
-	{ length: 6 },
-	(_, index) => createHeadingHandler(index + 1)
-);
-

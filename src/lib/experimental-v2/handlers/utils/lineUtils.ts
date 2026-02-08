@@ -1,4 +1,4 @@
-import type { ParsedNode } from '../types';
+import type { ParsedNode } from '../../types';
 
 export const appendText = (node: ParsedNode, text: string): void => {
     if (!text) {

@@ -2,7 +2,7 @@ import type { PatternHandler } from '../types';
 import { blockquoteHandler } from './blockquoteHandler';
 import { codeHandler } from './codeHandler';
 import { emphasisHandler } from './emphasisHandler';
-import { createHeadingHandler, headingHandlers } from './headingHandler';
+import { headingHandler } from './headingHandler';
 import { horizontalRuleHandler } from './horizontalRuleHandler';
 import { linkHandler } from './linkHandler';
 import { orderedListHandler } from './orderedListHandler';
@@ -11,7 +11,7 @@ import { tableHandler } from './tableHandler';
 import { unorderedListHandler } from './unorderedListHandler';
 
 export const experimentalHandlers: PatternHandler<any, any>[] = [
-    ...headingHandlers,
+    headingHandler,
     strongHandler,
     emphasisHandler,
     codeHandler,
@@ -26,9 +26,8 @@ export const experimentalHandlers: PatternHandler<any, any>[] = [
 export {
     blockquoteHandler,
     codeHandler,
-    createHeadingHandler,
     emphasisHandler,
-    headingHandlers,
+    headingHandler,
     horizontalRuleHandler,
     linkHandler,
     orderedListHandler,

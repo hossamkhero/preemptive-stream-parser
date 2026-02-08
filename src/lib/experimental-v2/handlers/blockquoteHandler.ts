@@ -1,4 +1,8 @@
 import type { PatternHandler } from '../types';
+import {
+	startAtLineStart,
+	stepLineTextWithInlineHandoff
+} from './utils/lineBlockUtils';
 
 type BlockquoteSeed = {};
 type BlockquoteState = {};
@@ -10,37 +14,20 @@ export const blockquoteHandler: PatternHandler<BlockquoteState, BlockquoteSeed> 
 	allowedNestings: INLINE_ALLOWED,
 
 	start(buffer: string, context) {
-		if (!context.lineStart) {
+		return startAtLineStart<BlockquoteSeed>(context, () => {
+			if (buffer.endsWith('>')) {
+				return { kind: 'potential' };
+			}
+			if (buffer.endsWith('> ')) {
+				return { kind: 'commit', seed: {}, consumed: 2 };
+			}
 			return { kind: 'no' };
-		}
-		if (buffer.endsWith('>')) {
-			return { kind: 'potential' };
-		}
-		if (buffer.endsWith('> ')) {
-			return { kind: 'commit', seed: {}, consumed: 2 };
-		}
-		return { kind: 'no' };
+		});
 	},
 
 	createState() {
 		return {};
 	},
 
-	step(ctx) {
-		const { char, writer, control } = ctx;
-
-		if (char === '\n') {
-			control.preventConsume();
-			return true;
-		}
-
-		if (char === '*' || char === '_' || char === '`' || char === '[') {
-			control.preventConsume();
-			return false;
-		}
-
-		writer.text(char);
-		return false;
-	}
+	step: stepLineTextWithInlineHandoff
 };
-

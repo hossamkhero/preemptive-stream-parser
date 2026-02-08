@@ -1,4 +1,4 @@
-import type { ParsedNode } from '../types';
+import type { ParsedNode } from '../../types';
 
 export const isInsideListElement = (node: ParsedNode): boolean =>
 	node.element === 'ul' || node.element === 'ol';
