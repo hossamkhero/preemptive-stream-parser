@@ -1,17 +1,14 @@
 import { useState, useEffect } from 'react';
 import {
     MarkdownStreamParser,
-    ExperimentalMarkdownStreamParser,
-    type ParsedMDNode,
-    type ExperimentalParsedNode
+    type ParsedMDNode
 } from '../lib';
 
 interface MarkdownStreamRendererProps {
     content?: string | null;
-    engine?: 'stable' | 'experimental-v2';
 }
 
-type RenderNode = ParsedMDNode | ExperimentalParsedNode;
+type RenderNode = ParsedMDNode;
 type RenderAttributes = RenderNode['attributes'];
 
 // Utility function to unescape common escaped characters
@@ -29,12 +26,6 @@ const unescapeContent = (content?: string | null): string => {
 };
 
 const getNodeProps = (attributes: RenderAttributes): Record<string, any> => {
-    if (Array.isArray(attributes)) {
-        return attributes.reduce<Record<string, any>>(
-            (acc, attr) => ({ ...acc, ...attr }),
-            {}
-        );
-    }
     return attributes;
 };
 
@@ -179,22 +170,18 @@ const renderNode = (node: RenderNode | string, key: string): React.ReactNode => 
 };
 
 export const MarkdownStreamRenderer: React.FC<MarkdownStreamRendererProps> = ({
-    content,
-    engine = 'stable'
+    content
 }) => {
     const [parsedTree, setParsedTree] = useState<RenderNode | null>(null);
 
     useEffect(() => {
-        const parser =
-            engine === 'experimental-v2'
-                ? new ExperimentalMarkdownStreamParser()
-                : new MarkdownStreamParser();
+        const parser = new MarkdownStreamParser();
 
         // Clean the escaped content before parsing
         const cleanedContent = unescapeContent(content);
         parser.parse(cleanedContent);
         setParsedTree(parser.root as RenderNode);
-    }, [content, engine]);
+    }, [content]);
 
     if (!parsedTree) {
         return null;

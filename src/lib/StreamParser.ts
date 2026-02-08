@@ -1,273 +1,267 @@
-export interface ParsedNode {
-    element: string;
-    children: (ParsedNode | string)[];
-    attributes: Record<string, any>[];
+import type {
+	ParsedNode,
+	PatternHandler,
+	StartResult,
+	StepControl,
+	Writer
+} from './types';
+
+interface ActiveStateEntry {
+	node: ParsedNode;
+	handler: PatternHandler<any, any>;
+	state: unknown;
 }
 
-export interface PatternHandler {
-    name: string;
-    elementName: string;
-    start(buffer: string, parser?: StreamParser): "no" | "potential" | "commit";
-    feed?(char: string, node: ParsedNode, parser: StreamParser): boolean;
-    end?(buffer: string): boolean;
-    upgrade?(node: ParsedNode, buffer: string, parser: StreamParser): void;
-    commit?(buffer: string, parser: StreamParser): string | void;
-    reuseTerminator?: boolean;
-    allowedNestings?: string[] | null;
-    prefixLength?(buffer: string): number;
-}
+type CommitStartResult = Extract<StartResult<any>, { kind: 'commit' }>;
 
-interface ActiveEntry {
-    pathIndex: number;
-    handler: PatternHandler;
-}
+type StartProbe =
+	| { kind: 'none' }
+	| { kind: 'potential' }
+	| {
+		kind: 'commit';
+		handler: PatternHandler<any, any>;
+		result: CommitStartResult;
+	};
 
 export interface StreamParserOptions {
-    rootElement?: string;
+	rootElement?: string;
 }
 
 export class StreamParser {
-    buffer = "";
-    private activePath: ActiveEntry[] = [];
+	public buffer = '';
+	public root: ParsedNode;
 
-    public root: ParsedNode;
+	private activeStack: ActiveStateEntry[] = [];
+	private lineStart = true;
 
-    constructor(private patterns: PatternHandler[], options: StreamParserOptions = {}) {
+	constructor(private readonly handlers: PatternHandler[], options: StreamParserOptions = {}) {
+		this.root = {
+			element: options.rootElement ?? 'root',
+			children: [],
+			attributes: {}
+		};
+	}
 
-        this.root = {
-            element: options.rootElement ?? "root",
-            children: [],
-            attributes: []
-        };
-    }
+	public parse(content: string): ParsedNode {
+		// Process input one character at a time and resolve buffered parser steps as far as possible.
+		for (const char of content) {
+			this.buffer += char;
 
-    private getNodeByPath(path: ActiveEntry[]): ParsedNode {
-        let node = this.root;
-        for (const entry of path) {
-            node = node.children[entry.pathIndex] as ParsedNode;
-        }
-        return node;
-    }
+			while (this.buffer.length > 0) {
+				if (!this.processCurrentBufferedChar({ allowStarts: true })) {
+					break;
+				}
+			}
+		}
 
-    public getCurrentNode(): ParsedNode {
-        return this.getNodeByPath(this.activePath);
-    }
+		return this.root;
+	}
 
-    private appendToCurrentNode(content: string | ParsedNode) {
-        const current = this.getCurrentNode();
+	public clearAllStates(): void {
+		this.buffer = '';
+		this.activeStack = [];
+		this.lineStart = true;
+		this.root = {
+			element: this.root.element,
+			children: [],
+			attributes: {}
+		};
+	}
 
-        if (typeof content === "string") {
-            this.addTextWithNewlineSplitting(current, content);
-        } else {
-            current.children.push(content);
-        }
-    }
+	private getCurrentNode(): ParsedNode {
+		const active = this.activeStack[this.activeStack.length - 1];
+		return active?.node ?? this.root;
+	}
 
-    private addTextWithNewlineSplitting(node: ParsedNode, text: string) {
-        const parts = text.split('\n');
+	private processCurrentBufferedChar(options: { allowStarts: boolean }): boolean {
+		const char = this.buffer[0];
+		const active = this.activeStack[this.activeStack.length - 1];
 
-        for (let i = 0; i < parts.length; i++) {
-            if (i > 0) {
-                node.children.push('\n');
-            }
+		if (active) {
+			const writer = this.createWriter(active.node);
+			let consumed = true;
+			const control: StepControl = {
+				preventConsume: () => {
+					consumed = false;
+				}
+			};
 
-            if (parts[i].length > 0) {
-                const lastChild = node.children[node.children.length - 1];
-                if (typeof lastChild === 'string' && lastChild !== '\n') {
-                    node.children[node.children.length - 1] = lastChild + parts[i];
-                } else {
-                    node.children.push(parts[i]);
-                }
-            }
-        }
-    }
+			const shouldClose = active.handler.step({
+				char,
+				node: active.node,
+				parser: this,
+				writer,
+				state: active.state,
+				control
+			});
 
-    public addTextToNode(node: ParsedNode, text: string) {
-        this.addTextWithNewlineSplitting(node, text);
-    }
+			if (consumed) {
+				this.updateLineStartForText(char);
+				this.buffer = this.buffer.slice(1);
+			}
 
-    private flushBuffer() {
-        if (this.buffer) {
-            this.appendToCurrentNode(this.buffer);
-            this.buffer = "";
-        }
-    }
+			if (shouldClose) {
+				this.popActiveNode();
+				return true;
+			}
 
-    parse(content: string): ParsedNode {
-        for (const char of content) {
-            if (this.activePath.length > 0) {
-                const current = this.getCurrentNode();
-                const currentEntry = this.activePath[this.activePath.length - 1];
+			if (consumed) {
+				return true;
+			}
+		}
 
-                this.buffer += char;
+		if (options.allowStarts) {
+			const probe = this.probeStart();
+			if (probe.kind === 'commit') {
+				this.commitFromProbe(probe.handler, probe.result);
+				return true;
+			}
+			if (probe.kind === 'potential') {
+				return false;
+			}
+		}
 
-                if (this.hasPotentialPattern()) {
-                    if (currentEntry.handler.feed && currentEntry.handler.feed(char, current, this)) {
-                        if (currentEntry.handler.upgrade) {
-                            currentEntry.handler.upgrade(current, this.buffer, this);
-                        }
-                        this.activePath.pop();
-                        this.buffer = '';
+		this.createWriter(this.getCurrentNode()).text(char);
+		this.updateLineStartForText(char);
+		this.buffer = this.buffer.slice(1);
+		return true;
+	}
 
-                        if (currentEntry.handler.reuseTerminator) {
-                            this.appendToCurrentNode(char);
-                        }
-                        continue;
-                    } else {
-                        const lastIdx = current.children.length - 1;
-                        if (lastIdx >= 0) {
-                            const lastChild = current.children[lastIdx];
-                            if (typeof lastChild === 'string' && lastChild.length > 0) {
-                                const updated = lastChild.slice(0, -1);
-                                if (updated.length > 0) {
-                                    current.children[lastIdx] = updated;
-                                } else {
-                                    current.children.pop();
-                                }
-                            }
-                        }
+	private probeStart(): StartProbe {
+		const currentHandler = this.activeStack[this.activeStack.length - 1]?.handler;
+		const candidates = this.getCandidates(currentHandler);
+		let hasPotential = false;
+		const startContext = {
+			lineStart: this.lineStart,
+			currentNode: this.getCurrentNode()
+		};
 
-                        this.tryCommit();
-                    }
-                    continue;
-                }
+		for (const handler of candidates) {
+			const result = handler.start(this.buffer, startContext);
+			if (result.kind === 'commit') {
+				return {
+					kind: 'commit',
+					handler: handler as PatternHandler<any, any>,
+					result
+				};
+			}
+			if (result.kind === 'potential') {
+				hasPotential = true;
+			}
+		}
 
-                if (currentEntry.handler.feed) {
-                    if (currentEntry.handler.feed(char, current, this)) {
-                        if (currentEntry.handler.upgrade) {
-                            currentEntry.handler.upgrade(current, this.buffer, this);
-                        }
-                        this.activePath.pop();
-                        this.buffer = '';
+		if (hasPotential) {
+			return { kind: 'potential' };
+		}
 
-                        if (currentEntry.handler.reuseTerminator) {
-                            this.appendToCurrentNode(char);
-                        }
-                        continue;
-                    }
-                } else {
-                    this.appendToCurrentNode(char);
-                    this.buffer = '';
-                    continue;
-                }
-            } else {
-                this.buffer += char;
+		return { kind: 'none' };
+	}
 
-                const committed = this.tryCommit();
+	private commitFromProbe(
+		handler: PatternHandler<any, any>,
+		result: CommitStartResult
+	): void {
+		const consumed = result.consumed ?? this.buffer.length;
+		if (consumed <= 0 || consumed > this.buffer.length) {
+			throw new Error(
+				`Invalid start consumed length ${consumed} for buffer length ${this.buffer.length} on ${handler.elementName}`
+			);
+		}
 
-                if (!committed && !this.hasPotentialPattern()) {
-                    this.flushBuffer();
-                }
-            }
-        }
+		const consumedPrefix = this.buffer.slice(0, consumed);
+		this.buffer = this.buffer.slice(consumed);
+		this.updateLineStartForText(consumedPrefix);
 
-        return this.root;
-    }
+		const parent = this.getCurrentNode();
+		const node: ParsedNode = {
+			element: handler.elementName,
+			children: [],
+			attributes: {}
+		};
+		parent.children.push(node);
 
-    public finalize(): ParsedNode {
-        while (this.activePath.length > 0) {
-            const currentEntry = this.activePath[this.activePath.length - 1];
-            const current = this.getCurrentNode();
-            if (currentEntry.handler.upgrade) {
-                currentEntry.handler.upgrade(current, this.buffer, this);
-            }
-            this.activePath.pop();
-        }
-        return this.root;
-    }
+		const state = handler.createState(result.seed, this, node);
+		this.activeStack.push({
+			node,
+			handler,
+			state
+		});
 
-    private tryCommit(): boolean {
-        let committed = false;
+		if (result.initialText) {
+			this.createWriter(node).text(result.initialText);
+		}
+	}
 
-        const currentHandler = this.activePath.length > 0 ? this.activePath[this.activePath.length - 1].handler : null;
-        const allowed = currentHandler?.allowedNestings;
-        if (currentHandler && Array.isArray(allowed) && allowed.length === 0) {
-            return false;
-        }
+	private getCandidates(currentHandler?: PatternHandler<any, any>): PatternHandler[] {
+		if (!currentHandler) {
+			return this.handlers;
+		}
 
-        for (let i = 0; i < this.patterns.length; i++) {
-            if (this.patterns[i].name === currentHandler?.name) {
-                continue;
-            }
-            if (currentHandler && Array.isArray(allowed) && allowed.length > 0) {
-                if (!allowed.includes(this.patterns[i].name)) {
-                    continue;
-                }
-            }
+		const allowed = currentHandler.allowedNestings;
+		if (Array.isArray(allowed) && allowed.length === 0) {
+			return [];
+		}
 
-            const result = this.patterns[i].start(this.buffer, this);
+		return this.handlers.filter((handler) => {
+			if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(handler.elementName)) {
+				return false;
+			}
+			return true;
+		});
+	}
 
-            if (result === "commit") {
-                const handler = this.patterns[i];
+	private createWriter(node: ParsedNode): Writer {
+		return {
+			text: (s: string) => {
+				this.addTextWithNewlineSplitting(node, s);
+			},
+			setAttr: (key: string, value: unknown) => {
+				node.attributes[key] = value;
+			}
+		};
+	}
 
-                const prefixLen = handler.prefixLength?.(this.buffer) ?? 0;
-                const triggerChar = prefixLen > 0 ? this.buffer.slice(-1) : '';
+	private addTextWithNewlineSplitting(node: ParsedNode, text: string): void {
+		if (!text) {
+			return;
+		}
 
-                if (prefixLen > 0 && this.buffer.length > prefixLen) {
-                    const textBeforePattern = this.buffer.slice(0, -prefixLen);
-                    if (textBeforePattern.length > 0) {
-                        this.appendToCurrentNode(textBeforePattern);
-                    }
-                }
+		const parts = text.split('\n');
+		for (let i = 0; i < parts.length; i += 1) {
+			if (i > 0) {
+				node.children.push('\n');
+			}
 
-                const initialNodeText = handler.commit?.(this.buffer, this) || "";
-                this.buffer = "";
-                const newNode: ParsedNode = {
-                    element: handler.elementName,
-                    children: [],
-                    attributes: []
-                };
+			if (parts[i].length === 0) {
+				continue;
+			}
 
-                const parent = this.getCurrentNode();
-                parent.children.push(newNode);
-                this.activePath.push({
-                    pathIndex: parent.children.length - 1,
-                    handler: handler
-                });
-                if (initialNodeText) {
-                    this.addTextToNode(newNode, initialNodeText);
-                }
+			const lastChild = node.children[node.children.length - 1];
+			if (typeof lastChild === 'string' && lastChild !== '\n') {
+				node.children[node.children.length - 1] = lastChild + parts[i];
+				continue;
+			}
+			node.children.push(parts[i]);
+		}
+	}
 
-                // Call feed for the trigger character so handlers can initialize
-                if (triggerChar && handler.feed) {
-                    handler.feed(triggerChar, newNode, this);
-                }
+	private updateLineStartForText(text: string): void {
+		if (!text) {
+			return;
+		}
+		this.lineStart = text[text.length - 1] === '\n';
+	}
 
-                committed = true;
-                break;
-            }
-        }
-
-        return committed;
-    }
-
-    private hasPotentialPattern(): boolean {
-        const currentHandler = this.activePath.length > 0 ? this.activePath[this.activePath.length - 1].handler : null;
-        const allowed = currentHandler?.allowedNestings;
-        if (currentHandler && Array.isArray(allowed) && allowed.length === 0) {
-            return false;
-        }
-
-        return this.patterns.some(p => {
-            if (p.name === currentHandler?.name) {
-                return false;
-            }
-            if (currentHandler && Array.isArray(allowed) && allowed.length > 0) {
-                if (!allowed.includes(p.name)) {
-                    return false;
-                }
-            }
-            return p.start(this.buffer, this) === "potential" || p.start(this.buffer, this) === "commit";
-        });
-    }
-
-    public clearAllStates(): void {
-        this.buffer = "";
-        this.activePath = [];
-        this.root = {
-            element: this.root.element,
-            children: [],
-            attributes: []
-        };
-    }
+	private popActiveNode(): void {
+		const active = this.activeStack.pop();
+		if (!active) {
+			return;
+		}
+		active.handler.onFinalize?.({
+			node: active.node,
+			parser: this,
+			writer: this.createWriter(active.node),
+			state: active.state
+		});
+	}
 }

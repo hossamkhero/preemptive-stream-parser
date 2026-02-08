@@ -1,13 +1,10 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import {
-    createMarkdownParser,
-    createJsonHandler,
     StreamParser,
-    ExperimentalMarkdownStreamParser,
-    ExperimentalJSONParser,
+    MarkdownStreamParser,
+    JSONParser,
     type ParsedNode,
-    type PatternHandler,
-    type HandlerExtension
+    type PatternHandler
 } from '../lib'
 import { MarkdownStreamRenderer } from './MarkdownRenderer'
 
@@ -17,9 +14,6 @@ interface TestCase {
     input: string
     description?: string
 }
-
-type MarkdownEngine = 'stable' | 'experimental-v2'
-type JsonEngine = 'stable' | 'experimental-v2'
 
 const EXAMPLE_MARKDOWN = `# Hello World
 
@@ -65,8 +59,6 @@ export function TestPlayground() {
     const [savedTestCases, setSavedTestCases] = useState<TestCase[]>([])
     const [testCaseName, setTestCaseName] = useState('')
     const [selectedExample, setSelectedExample] = useState('markdown')
-    const [markdownEngine, setMarkdownEngine] = useState<MarkdownEngine>('stable')
-    const [jsonEngine, setJsonEngine] = useState<JsonEngine>('stable')
 
     const streamIntervalRef = useRef<number | null>(null)
     const charIndexRef = useRef(0)
@@ -77,82 +69,37 @@ export function TestPlayground() {
     }, [input])
 
     const exampleConfigs = useMemo(() => {
-        const imageHandler: PatternHandler = {
-            name: 'image',
-            elementName: 'img',
-            allowedNestings: [],
-            start: (buffer) => {
-                if (buffer.endsWith('![')) return 'potential'
-                if (buffer.match(/!\[[^\s]$/)) return 'commit'
-                return 'no'
+        const diagramHandler: PatternHandler<
+            {
+                phase: 'node' | 'arrow' | 'target'
+                buffer: string
+                currentEdge: { from: string; to?: string; label?: string } | null
             },
-            prefixLength: () => 3,
-            commit: (buffer) => buffer[buffer.length - 1] ?? '',
-            feed: (char, node) => {
-                if (!node.attributes[0]) {
-                    node.attributes[0] = { phase: 'alt', buffer: '' }
-                }
-                const state = node.attributes[0]
-                if (state.phase === 'alt') {
-                    if (char === ']') {
-                        state.phase = 'between'
-                    } else {
-                        node.children.push(char)
-                    }
-                    return false
-                }
-                if (state.phase === 'between') {
-                    if (char === '(') state.phase = 'src'
-                    return false
-                }
-                if (state.phase === 'src') {
-                    if (char === ')') {
-                        node.attributes[0] = { src: state.buffer }
-                        return true
-                    }
-                    state.buffer += char
-                }
-                return false
-            }
-        }
-
-        const imageExtension: HandlerExtension = {
-            name: 'images',
-            handlers: [imageHandler],
-            placement: { before: 'a' }
-        }
-
-        const jsonHandler = createJsonHandler()
-
-        const diagramHandler: PatternHandler = {
-            name: 'diagram',
+            undefined
+        > = {
             elementName: 'diagram',
             allowedNestings: [],
             start: (buffer) => {
-                if (buffer.endsWith('graph{')) return 'commit'
-                if (buffer.endsWith('graph{'.slice(0, buffer.length))) return 'potential'
-                return 'no'
-            },
-            prefixLength: () => 6,
-            commit: () => '',
-            feed: (char, node) => {
-                if (!node.attributes[0]) {
-                    node.attributes[0] = {
-                        phase: 'node',
-                        buffer: '',
-                        currentEdge: null
+                const opener = 'graph{'
+                if (opener.startsWith(buffer)) {
+                    if (buffer === opener) {
+                        return { kind: 'commit', seed: undefined, consumed: opener.length }
                     }
+                    return { kind: 'potential' }
                 }
-                const state = node.attributes[0] as {
-                    phase: 'node' | 'arrow' | 'target'
-                    buffer: string
-                    currentEdge: { from: string; to?: string; label?: string } | null
-                }
+                return { kind: 'no' }
+            },
+            createState: () => ({
+                phase: 'node' as const,
+                buffer: '',
+                currentEdge: null
+            }),
+            step: ({ char, node, state }) => {
 
                 const flushNode = () => {
                     const name = state.buffer.trim()
                     if (!name) return
-                    node.children.push({ element: 'node', children: [name], attributes: [] })
+                    node.children.push({ element: 'node', children: [name], attributes: {} })
                     state.buffer = ''
                 }
 
@@ -161,7 +108,7 @@ export function TestPlayground() {
                     node.children.push({
                         element: 'edge',
                         children: [state.currentEdge.from, state.currentEdge.to],
-                        attributes: state.currentEdge.label ? [{ label: state.currentEdge.label }] : []
+                        attributes: state.currentEdge.label ? { label: state.currentEdge.label } : {}
                     })
                     state.currentEdge = null
                 }
@@ -230,31 +177,19 @@ export function TestPlayground() {
         return [
             {
                 id: 'markdown',
-                name: markdownEngine === 'stable' ? 'Markdown (stable + images)' : 'Markdown (experimental v2)',
-                description:
-                    markdownEngine === 'stable'
-                        ? 'Stable markdown parser with image extension enabled.'
-                        : 'Experimental v2 markdown parser (state-machine handlers).',
+                name: 'Markdown',
+                description: 'State-machine markdown parser.',
                 input: EXAMPLE_MARKDOWN,
                 renderer: 'markdown' as const,
-                createParser: () =>
-                    markdownEngine === 'stable'
-                        ? createMarkdownParser([imageExtension])
-                        : new ExperimentalMarkdownStreamParser()
+                createParser: () => new MarkdownStreamParser()
             },
             {
                 id: 'json',
-                name: jsonEngine === 'stable' ? 'Streaming JSON (stable)' : 'Streaming JSON (experimental v2)',
-                description:
-                    jsonEngine === 'stable'
-                        ? 'Incremental JSON collector with nested objects/arrays.'
-                        : 'Experimental v2 JSON parser (FSM-based handler).',
+                name: 'Streaming JSON',
+                description: 'State-machine JSON parser.',
                 input: '{\"user\":{\"id\":1,\"tags\":[\"alpha\",\"beta\"],\"ok\":true}}',
                 renderer: 'json' as const,
-                createParser: () =>
-                    jsonEngine === 'stable'
-                        ? new StreamParser([jsonHandler])
-                        : new ExperimentalJSONParser()
+                createParser: () => new JSONParser()
             },
             {
                 id: 'diagram',
@@ -265,7 +200,7 @@ export function TestPlayground() {
                 createParser: () => new StreamParser([diagramHandler])
             }
         ]
-    }, [markdownEngine, jsonEngine])
+    }, [])
 
     const selectedConfig = exampleConfigs.find((example) => example.id === selectedExample) ?? exampleConfigs[0]
 
@@ -472,7 +407,7 @@ export function TestPlayground() {
         const edges = edgeItems.map((edge) => ({
             from: String(edge.children[0] ?? ''),
             to: String(edge.children[1] ?? ''),
-            label: edge.attributes[0]?.label
+            label: typeof edge.attributes.label === 'string' ? edge.attributes.label : undefined
         }))
 
         const nodeNames = nodeItems.map((nodeItem) => nodeItem.children.join(''))
@@ -592,7 +527,7 @@ export function TestPlayground() {
         type JsonRenderableNode = {
             element: string
             children: Array<JsonRenderableNode | string>
-            attributes: Record<string, unknown> | Array<Record<string, unknown>>
+            attributes: Record<string, unknown>
         }
 
         const isJsonNode = (value: unknown): value is JsonRenderableNode => {
@@ -602,10 +537,6 @@ export function TestPlayground() {
         }
 
         const getNodeType = (jsonNode: JsonRenderableNode): string | undefined => {
-            if (Array.isArray(jsonNode.attributes)) {
-                const first = jsonNode.attributes[0]
-                return typeof first?.type === 'string' ? first.type : undefined
-            }
             const typed = jsonNode.attributes as { type?: unknown }
             return typeof typed.type === 'string' ? typed.type : undefined
         }
@@ -777,31 +708,9 @@ export function TestPlayground() {
                             <h2 className="text-sm font-semibold text-zinc-400">Input</h2>
                             <p className="text-xs text-zinc-500">
                                 {selectedConfig.description}
-                                {selectedExample === 'markdown' ? ` | engine: ${markdownEngine}` : ''}
-                                {selectedExample === 'json' ? ` | engine: ${jsonEngine}` : ''}
                             </p>
                         </div>
                         <div className="flex items-center gap-2">
-                            {selectedExample === 'markdown' && (
-                                <select
-                                    value={markdownEngine}
-                                    onChange={(e) => setMarkdownEngine(e.target.value as MarkdownEngine)}
-                                    className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
-                                >
-                                    <option value="stable">Stable</option>
-                                    <option value="experimental-v2">Experimental v2</option>
-                                </select>
-                            )}
-                            {selectedExample === 'json' && (
-                                <select
-                                    value={jsonEngine}
-                                    onChange={(e) => setJsonEngine(e.target.value as JsonEngine)}
-                                    className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
-                                >
-                                    <option value="stable">JSON Stable</option>
-                                    <option value="experimental-v2">JSON Experimental v2</option>
-                                </select>
-                            )}
                             <select
                                 value={selectedExample}
                                 onChange={(e) => setSelectedExample(e.target.value)}
@@ -892,7 +801,7 @@ export function TestPlayground() {
                     <h2 className="text-sm font-semibold text-zinc-400 mb-3">Rendered Output</h2>
                     {selectedConfig.renderer === 'markdown' ? (
                         <div className="bg-white text-zinc-800 rounded-lg p-4 min-h-[200px]">
-                            <MarkdownStreamRenderer content={displayContent} engine={markdownEngine} />
+                            <MarkdownStreamRenderer content={displayContent} />
                         </div>
                     ) : selectedConfig.renderer === 'diagram' ? (
                         <div className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px]">

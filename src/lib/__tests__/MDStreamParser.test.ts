@@ -138,7 +138,32 @@ describe('MarkdownStreamParser', () => {
             ) as ParsedMDNode
             expect(link).toBeDefined()
             expect(link.children.join('')).toContain('Example')
-            expect(link.attributes[0]).toHaveProperty('href', 'https://example.com')
+            expect(link.attributes).toHaveProperty('href', 'https://example.com')
+        })
+
+        test('should not drop text after closing label without url', () => {
+            const result = parser.parse('[a]b')
+            const link = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'a'
+            ) as ParsedMDNode
+            expect(link).toBeDefined()
+            expect(link.children.join('')).toBe('a')
+            expect(result.children[result.children.length - 1]).toBe('b')
+        })
+
+        test('should parse strong when it starts the link label', () => {
+            const result = parser.parse('[**x**](u)')
+            const link = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'a'
+            ) as ParsedMDNode
+            expect(link).toBeDefined()
+            expect(link.attributes).toHaveProperty('href', 'u')
+
+            const strong = link.children.find(
+                (c) => typeof c !== 'string' && c.element === 'strong'
+            ) as ParsedMDNode
+            expect(strong).toBeDefined()
+            expect(strong.children.join('')).toBe('x')
         })
     })
 
@@ -600,6 +625,38 @@ describe('MarkdownStreamParser', () => {
             expect(nonEmptyRows).toHaveLength(2)
         })
 
+        test('should close table when next line is not a table row', () => {
+            const result = parser.parse('| A | B |\ntext after table')
+
+            const table = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'table'
+            ) as ParsedMDNode
+            expect(table).toBeDefined()
+
+            const rows = findRows(table)
+            expect(rows).toHaveLength(1)
+
+            const rootText = result.children
+                .filter((c): c is string => typeof c === 'string')
+                .join('')
+            expect(rootText).toContain('text after table')
+        })
+
+        test('should allow a new block handler after a table line', () => {
+            const result = parser.parse('| A | B |\n# Title')
+
+            const table = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'table'
+            ) as ParsedMDNode
+            expect(table).toBeDefined()
+
+            const heading = result.children.find(
+                (c) => typeof c !== 'string' && c.element === 'h1'
+            ) as ParsedMDNode
+            expect(heading).toBeDefined()
+            expect(heading.children.join('')).toBe('Title')
+        })
+
         test('should stream each character live in current cell', () => {
             const streamParser = new MarkdownStreamParser()
 
@@ -676,4 +733,3 @@ describe('MarkdownStreamParser', () => {
         })
     })
 })
-

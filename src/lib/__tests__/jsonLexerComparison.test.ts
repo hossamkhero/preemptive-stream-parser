@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { StreamParser, type ParsedNode } from '../StreamParser'
-import { createJsonHandler } from '../jsonStreamHandler'
+import { JSONParser } from '../JSONParser'
+import type { ParsedNode } from '../types'
 import { Lexer } from '../Lexer'
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -10,7 +10,7 @@ import { Lexer } from '../Lexer'
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 type JsonNode = ParsedNode | string
 
-const VERBOSE = true // Toggle for verbose output
+const VERBOSE = false // Toggle for verbose output
 
 const log = (...args: unknown[]) => {
     if (VERBOSE) console.log(...args)
@@ -22,6 +22,16 @@ const logSection = (title: string) => {
         console.log(`  ${title}`)
         console.log('═'.repeat(70))
     }
+}
+
+const getNodeType = (node: ParsedNode): string | undefined => {
+    const attributes = node.attributes as unknown
+    if (Array.isArray(attributes)) {
+        const first = attributes[0] as { type?: unknown } | undefined
+        return typeof first?.type === 'string' ? first.type : undefined
+    }
+    const record = attributes as { type?: unknown }
+    return typeof record.type === 'string' ? record.type : undefined
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -55,7 +65,7 @@ const readValueNode = (node: JsonNode): JsonValue => {
     }
 
     if (node.element === 'value') {
-        const type = node.attributes?.[0]?.type
+        const type = getNodeType(node)
         const raw = node.children.join('')
         if (type === 'string') {
             return raw
@@ -84,7 +94,7 @@ const readValueNode = (node: JsonNode): JsonValue => {
         .map((child) => readValueNode(child))
 }
 
-const readStreamParserJson = (parser: StreamParser): JsonValue | null => {
+const readStreamParserJson = (parser: JSONParser): JsonValue | null => {
     try {
         const jsonNode = parser.root.children.find(
             (child) => typeof child !== 'string' && child.element === 'json'
@@ -145,7 +155,7 @@ interface StreamSnapshot {
  */
 const captureStreamingSnapshots = (input: string): StreamSnapshot[] => {
     const snapshots: StreamSnapshot[] = []
-    const streamParser = new StreamParser([createJsonHandler()])
+    const streamParser = new JSONParser()
     const lexer = new Lexer()
     let inputSoFar = ''
 
@@ -816,7 +826,7 @@ describe('JSON Streaming: Lexer vs StreamParser Consistency', () => {
         test(`consistency check: ${name}`, () => {
             logSection(`Consistency: ${name}`)
 
-            const streamParser = new StreamParser([createJsonHandler()])
+            const streamParser = new JSONParser()
             const lexer = new Lexer()
 
             for (const char of input) {
@@ -848,7 +858,7 @@ describe('JSON Streaming: Lexer vs StreamParser Consistency', () => {
         for (const input of incompleteInputs) {
             logSection(`Incomplete: ${input}`)
 
-            const streamParser = new StreamParser([createJsonHandler()])
+            const streamParser = new JSONParser()
             const lexer = new Lexer()
 
             expect(() => {

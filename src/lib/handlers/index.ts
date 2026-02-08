@@ -10,7 +10,7 @@ import { strongHandler } from './strongHandler';
 import { tableHandler } from './tableHandler';
 import { unorderedListHandler } from './unorderedListHandler';
 
-export const experimentalHandlers: PatternHandler<any, any>[] = [
+export const markdownHandlers: PatternHandler<any, any>[] = [
     headingHandler,
     strongHandler,
     emphasisHandler,
