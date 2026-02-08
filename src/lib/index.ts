@@ -14,7 +14,9 @@ export { createJsonHandler } from './jsonStreamHandler'
 export {
   StreamParser as ExperimentalStreamParser,
   MarkdownStreamParser as ExperimentalMarkdownStreamParser,
+  JSONParser as ExperimentalJSONParser,
   experimentalHandlers as experimentalHandlersExperimental,
+  jsonHandler as experimentalJsonHandler,
   headingHandler,
   strongHandler,
   emphasisHandler,

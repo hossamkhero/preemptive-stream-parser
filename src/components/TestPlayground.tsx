@@ -4,6 +4,7 @@ import {
     createJsonHandler,
     StreamParser,
     ExperimentalMarkdownStreamParser,
+    ExperimentalJSONParser,
     type ParsedNode,
     type PatternHandler,
     type HandlerExtension
@@ -18,6 +19,7 @@ interface TestCase {
 }
 
 type MarkdownEngine = 'stable' | 'experimental-v2'
+type JsonEngine = 'stable' | 'experimental-v2'
 
 const EXAMPLE_MARKDOWN = `# Hello World
 
@@ -64,6 +66,7 @@ export function TestPlayground() {
     const [testCaseName, setTestCaseName] = useState('')
     const [selectedExample, setSelectedExample] = useState('markdown')
     const [markdownEngine, setMarkdownEngine] = useState<MarkdownEngine>('stable')
+    const [jsonEngine, setJsonEngine] = useState<JsonEngine>('stable')
 
     const streamIntervalRef = useRef<number | null>(null)
     const charIndexRef = useRef(0)
@@ -241,11 +244,17 @@ export function TestPlayground() {
             },
             {
                 id: 'json',
-                name: 'Streaming JSON',
-                description: 'Incremental JSON collector with nested objects/arrays.',
+                name: jsonEngine === 'stable' ? 'Streaming JSON (stable)' : 'Streaming JSON (experimental v2)',
+                description:
+                    jsonEngine === 'stable'
+                        ? 'Incremental JSON collector with nested objects/arrays.'
+                        : 'Experimental v2 JSON parser (FSM-based handler).',
                 input: '{\"user\":{\"id\":1,\"tags\":[\"alpha\",\"beta\"],\"ok\":true}}',
                 renderer: 'json' as const,
-                createParser: () => new StreamParser([jsonHandler])
+                createParser: () =>
+                    jsonEngine === 'stable'
+                        ? new StreamParser([jsonHandler])
+                        : new ExperimentalJSONParser()
             },
             {
                 id: 'diagram',
@@ -256,7 +265,7 @@ export function TestPlayground() {
                 createParser: () => new StreamParser([diagramHandler])
             }
         ]
-    }, [markdownEngine])
+    }, [markdownEngine, jsonEngine])
 
     const selectedConfig = exampleConfigs.find((example) => example.id === selectedExample) ?? exampleConfigs[0]
 
@@ -579,46 +588,71 @@ export function TestPlayground() {
         )
     }
 
-    const renderJson = useCallback((node: ParsedNode | null) => {
-        if (!node) return 'No JSON parsed yet.'
+    const renderJson = useCallback((node: unknown) => {
+        type JsonRenderableNode = {
+            element: string
+            children: Array<JsonRenderableNode | string>
+            attributes: Record<string, unknown> | Array<Record<string, unknown>>
+        }
+
+        const isJsonNode = (value: unknown): value is JsonRenderableNode => {
+            if (typeof value !== 'object' || value === null) return false
+            const maybe = value as Partial<JsonRenderableNode>
+            return typeof maybe.element === 'string' && Array.isArray(maybe.children)
+        }
+
+        const getNodeType = (jsonNode: JsonRenderableNode): string | undefined => {
+            if (Array.isArray(jsonNode.attributes)) {
+                const first = jsonNode.attributes[0]
+                return typeof first?.type === 'string' ? first.type : undefined
+            }
+            const typed = jsonNode.attributes as { type?: unknown }
+            return typeof typed.type === 'string' ? typed.type : undefined
+        }
+
+        if (!isJsonNode(node)) return 'No JSON parsed yet.'
+
         const jsonNode = node.children.find(
-            (child) => typeof child !== 'string' && child.element === 'json'
-        ) as ParsedNode | undefined
+            (child): child is JsonRenderableNode =>
+                isJsonNode(child) && child.element === 'json'
+        )
         if (!jsonNode || jsonNode.children.length === 0) return 'No JSON parsed yet.'
 
-        const buildValue = (valueNode: ParsedNode): unknown => {
+        const buildValue = (valueNode: JsonRenderableNode): unknown => {
             if (valueNode.element === 'object') {
                 const obj: Record<string, unknown> = {}
                 for (const child of valueNode.children) {
-                    if (typeof child === 'string') continue
-                    if (child.element === 'pair') {
-                        const key = String(child.children[0] ?? '')
-                        const rawValue = child.children[1]
-                        if (typeof rawValue === 'string') {
-                            obj[key] = rawValue
-                        } else if (rawValue) {
-                            obj[key] = buildValue(rawValue)
-                        } else {
-                            obj[key] = null
-                        }
+                    if (!isJsonNode(child) || child.element !== 'pair') continue
+
+                    const keyNode = child.children[0]
+                    const key =
+                        typeof keyNode === 'string'
+                            ? keyNode
+                            : isJsonNode(keyNode)
+                                ? String(buildValue(keyNode))
+                                : ''
+
+                    const rawValue = child.children[1]
+                    if (typeof rawValue === 'string') {
+                        obj[key] = rawValue
+                    } else if (isJsonNode(rawValue)) {
+                        obj[key] = buildValue(rawValue)
+                    } else {
+                        obj[key] = null
                     }
                 }
                 return obj
             }
+
             if (valueNode.element === 'array') {
-                const arr: unknown[] = []
-                for (const child of valueNode.children) {
-                    if (typeof child === 'string') {
-                        arr.push(child)
-                    } else {
-                        arr.push(buildValue(child))
-                    }
-                }
-                return arr
+                return valueNode.children.map((child) =>
+                    typeof child === 'string' ? child : buildValue(child)
+                )
             }
+
             if (valueNode.element === 'value') {
                 const raw = valueNode.children.join('')
-                const type = valueNode.attributes[0]?.type
+                const type = getNodeType(valueNode)
                 if (type === 'null') return null
                 if (type === 'boolean') return raw === 'true'
                 if (type === 'number') {
@@ -636,12 +670,14 @@ export function TestPlayground() {
                 }
                 return raw
             }
+
             return valueNode.children.join('')
         }
 
         const rootValue = jsonNode.children.find(
-            (child) => typeof child !== 'string' && (child.element === 'object' || child.element === 'array')
-        ) as ParsedNode | undefined
+            (child): child is JsonRenderableNode =>
+                isJsonNode(child) && (child.element === 'object' || child.element === 'array')
+        )
 
         if (!rootValue) return 'No JSON parsed yet.'
         return JSON.stringify(buildValue(rootValue), null, 2)
@@ -742,6 +778,7 @@ export function TestPlayground() {
                             <p className="text-xs text-zinc-500">
                                 {selectedConfig.description}
                                 {selectedExample === 'markdown' ? ` | engine: ${markdownEngine}` : ''}
+                                {selectedExample === 'json' ? ` | engine: ${jsonEngine}` : ''}
                             </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -753,6 +790,16 @@ export function TestPlayground() {
                                 >
                                     <option value="stable">Stable</option>
                                     <option value="experimental-v2">Experimental v2</option>
+                                </select>
+                            )}
+                            {selectedExample === 'json' && (
+                                <select
+                                    value={jsonEngine}
+                                    onChange={(e) => setJsonEngine(e.target.value as JsonEngine)}
+                                    className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
+                                >
+                                    <option value="stable">JSON Stable</option>
+                                    <option value="experimental-v2">JSON Experimental v2</option>
                                 </select>
                             )}
                             <select
@@ -853,7 +900,7 @@ export function TestPlayground() {
                         </div>
                     ) : selectedConfig.renderer === 'json' ? (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">
-                            {renderJson(parsedAST as ParsedNode | null)}
+                            {renderJson(parsedAST)}
                         </pre>
                     ) : (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">

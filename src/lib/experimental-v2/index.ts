@@ -2,6 +2,8 @@ export { StreamParser } from './StreamParser';
 export type { StreamParserOptions } from './StreamParser';
 export { MarkdownStreamParser } from './MDStreamParser';
 export type { ParsedMDNode } from './MDStreamParser';
+export { JSONParser } from './JSONParser';
+export type { ParsedJSONNode } from './JSONParser';
 export type {
     FinalizeContext,
     StartContext,
@@ -13,6 +15,7 @@ export type {
     StartResult,
     Writer
 } from './types';
+export { jsonHandler } from './jsonHandler';
 export {
     experimentalHandlers,
     blockquoteHandler,
