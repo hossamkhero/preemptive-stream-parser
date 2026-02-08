@@ -1,11 +1,10 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import {
-    createMarkdownParser,
-    createJsonHandler,
     StreamParser,
+    MarkdownStreamParser,
+    JSONParser,
     type ParsedNode,
-    type PatternHandler,
-    type HandlerExtension
+    type PatternHandler
 } from '../lib'
 import { MarkdownStreamRenderer } from './MarkdownRenderer'
 
@@ -56,7 +55,7 @@ export function TestPlayground() {
     const [streamSpeed, setStreamSpeed] = useState(50) // ticks per second
     const [burstSize, setBurstSize] = useState(1)
     const [burstMode, setBurstMode] = useState<'chars' | 'words'>('chars')
-    const [parsedAST, setParsedAST] = useState<ParsedNode | null>(null)
+    const [parsedAST, setParsedAST] = useState<unknown>(null)
     const [savedTestCases, setSavedTestCases] = useState<TestCase[]>([])
     const [testCaseName, setTestCaseName] = useState('')
     const [selectedExample, setSelectedExample] = useState('markdown')
@@ -70,82 +69,37 @@ export function TestPlayground() {
     }, [input])
 
     const exampleConfigs = useMemo(() => {
-        const imageHandler: PatternHandler = {
-            name: 'image',
-            elementName: 'img',
-            allowedNestings: [],
-            start: (buffer) => {
-                if (buffer.endsWith('![')) return 'potential'
-                if (buffer.match(/!\[[^\s]$/)) return 'commit'
-                return 'no'
+        const diagramHandler: PatternHandler<
+            {
+                phase: 'node' | 'arrow' | 'target'
+                buffer: string
+                currentEdge: { from: string; to?: string; label?: string } | null
             },
-            prefixLength: () => 3,
-            commit: (buffer) => buffer[buffer.length - 1] ?? '',
-            feed: (char, node) => {
-                if (!node.attributes[0]) {
-                    node.attributes[0] = { phase: 'alt', buffer: '' }
-                }
-                const state = node.attributes[0]
-                if (state.phase === 'alt') {
-                    if (char === ']') {
-                        state.phase = 'between'
-                    } else {
-                        node.children.push(char)
-                    }
-                    return false
-                }
-                if (state.phase === 'between') {
-                    if (char === '(') state.phase = 'src'
-                    return false
-                }
-                if (state.phase === 'src') {
-                    if (char === ')') {
-                        node.attributes[0] = { src: state.buffer }
-                        return true
-                    }
-                    state.buffer += char
-                }
-                return false
-            }
-        }
-
-        const imageExtension: HandlerExtension = {
-            name: 'images',
-            handlers: [imageHandler],
-            placement: { before: 'a' }
-        }
-
-        const jsonHandler = createJsonHandler()
-
-        const diagramHandler: PatternHandler = {
-            name: 'diagram',
+            undefined
+        > = {
             elementName: 'diagram',
             allowedNestings: [],
             start: (buffer) => {
-                if (buffer.endsWith('graph{')) return 'commit'
-                if (buffer.endsWith('graph{'.slice(0, buffer.length))) return 'potential'
-                return 'no'
-            },
-            prefixLength: () => 6,
-            commit: () => '',
-            feed: (char, node) => {
-                if (!node.attributes[0]) {
-                    node.attributes[0] = {
-                        phase: 'node',
-                        buffer: '',
-                        currentEdge: null
+                const opener = 'graph{'
+                if (opener.startsWith(buffer)) {
+                    if (buffer === opener) {
+                        return { kind: 'commit', seed: undefined, consumed: opener.length }
                     }
+                    return { kind: 'potential' }
                 }
-                const state = node.attributes[0] as {
-                    phase: 'node' | 'arrow' | 'target'
-                    buffer: string
-                    currentEdge: { from: string; to?: string; label?: string } | null
-                }
+                return { kind: 'no' }
+            },
+            createState: () => ({
+                phase: 'node' as const,
+                buffer: '',
+                currentEdge: null
+            }),
+            step: ({ char, node, state }) => {
 
                 const flushNode = () => {
                     const name = state.buffer.trim()
                     if (!name) return
-                    node.children.push({ element: 'node', children: [name], attributes: [] })
+                    node.children.push({ element: 'node', children: [name], attributes: {} })
                     state.buffer = ''
                 }
 
@@ -154,7 +108,7 @@ export function TestPlayground() {
                     node.children.push({
                         element: 'edge',
                         children: [state.currentEdge.from, state.currentEdge.to],
-                        attributes: state.currentEdge.label ? [{ label: state.currentEdge.label }] : []
+                        attributes: state.currentEdge.label ? { label: state.currentEdge.label } : {}
                     })
                     state.currentEdge = null
                 }
@@ -223,19 +177,19 @@ export function TestPlayground() {
         return [
             {
                 id: 'markdown',
-                name: 'Markdown (with images)',
-                description: 'Markdown parser extended with image tokens.',
+                name: 'Markdown',
+                description: 'State-machine markdown parser.',
                 input: EXAMPLE_MARKDOWN,
                 renderer: 'markdown' as const,
-                createParser: () => createMarkdownParser([imageExtension])
+                createParser: () => new MarkdownStreamParser()
             },
             {
                 id: 'json',
                 name: 'Streaming JSON',
-                description: 'Incremental JSON collector with nested objects/arrays.',
+                description: 'State-machine JSON parser.',
                 input: '{\"user\":{\"id\":1,\"tags\":[\"alpha\",\"beta\"],\"ok\":true}}',
                 renderer: 'json' as const,
-                createParser: () => new StreamParser([jsonHandler])
+                createParser: () => new JSONParser()
             },
             {
                 id: 'diagram',
@@ -256,7 +210,7 @@ export function TestPlayground() {
         charIndexRef.current = 0
         setIsStreaming(false)
         setIsPaused(false)
-    }, [selectedConfig])
+    }, [selectedConfig.input, selectedExample])
 
     // Load saved test cases from localStorage
     useEffect(() => {
@@ -275,7 +229,7 @@ export function TestPlayground() {
         const parser = selectedConfig.createParser()
         const content = isStreaming ? streamedContent : input
         parser.parse(content)
-        setParsedAST(parser.root)
+        setParsedAST(parser.root as unknown)
     }, [input, streamedContent, isStreaming, selectedConfig])
 
     const clearStreamInterval = useCallback(() => {
@@ -453,7 +407,7 @@ export function TestPlayground() {
         const edges = edgeItems.map((edge) => ({
             from: String(edge.children[0] ?? ''),
             to: String(edge.children[1] ?? ''),
-            label: edge.attributes[0]?.label
+            label: typeof edge.attributes.label === 'string' ? edge.attributes.label : undefined
         }))
 
         const nodeNames = nodeItems.map((nodeItem) => nodeItem.children.join(''))
@@ -569,46 +523,67 @@ export function TestPlayground() {
         )
     }
 
-    const renderJson = useCallback((node: ParsedNode | null) => {
-        if (!node) return 'No JSON parsed yet.'
+    const renderJson = useCallback((node: unknown) => {
+        type JsonRenderableNode = {
+            element: string
+            children: Array<JsonRenderableNode | string>
+            attributes: Record<string, unknown>
+        }
+
+        const isJsonNode = (value: unknown): value is JsonRenderableNode => {
+            if (typeof value !== 'object' || value === null) return false
+            const maybe = value as Partial<JsonRenderableNode>
+            return typeof maybe.element === 'string' && Array.isArray(maybe.children)
+        }
+
+        const getNodeType = (jsonNode: JsonRenderableNode): string | undefined => {
+            const typed = jsonNode.attributes as { type?: unknown }
+            return typeof typed.type === 'string' ? typed.type : undefined
+        }
+
+        if (!isJsonNode(node)) return 'No JSON parsed yet.'
+
         const jsonNode = node.children.find(
-            (child) => typeof child !== 'string' && child.element === 'json'
-        ) as ParsedNode | undefined
+            (child): child is JsonRenderableNode =>
+                isJsonNode(child) && child.element === 'json'
+        )
         if (!jsonNode || jsonNode.children.length === 0) return 'No JSON parsed yet.'
 
-        const buildValue = (valueNode: ParsedNode): unknown => {
+        const buildValue = (valueNode: JsonRenderableNode): unknown => {
             if (valueNode.element === 'object') {
                 const obj: Record<string, unknown> = {}
                 for (const child of valueNode.children) {
-                    if (typeof child === 'string') continue
-                    if (child.element === 'pair') {
-                        const key = String(child.children[0] ?? '')
-                        const rawValue = child.children[1]
-                        if (typeof rawValue === 'string') {
-                            obj[key] = rawValue
-                        } else if (rawValue) {
-                            obj[key] = buildValue(rawValue)
-                        } else {
-                            obj[key] = null
-                        }
+                    if (!isJsonNode(child) || child.element !== 'pair') continue
+
+                    const keyNode = child.children[0]
+                    const key =
+                        typeof keyNode === 'string'
+                            ? keyNode
+                            : isJsonNode(keyNode)
+                                ? String(buildValue(keyNode))
+                                : ''
+
+                    const rawValue = child.children[1]
+                    if (typeof rawValue === 'string') {
+                        obj[key] = rawValue
+                    } else if (isJsonNode(rawValue)) {
+                        obj[key] = buildValue(rawValue)
+                    } else {
+                        obj[key] = null
                     }
                 }
                 return obj
             }
+
             if (valueNode.element === 'array') {
-                const arr: unknown[] = []
-                for (const child of valueNode.children) {
-                    if (typeof child === 'string') {
-                        arr.push(child)
-                    } else {
-                        arr.push(buildValue(child))
-                    }
-                }
-                return arr
+                return valueNode.children.map((child) =>
+                    typeof child === 'string' ? child : buildValue(child)
+                )
             }
+
             if (valueNode.element === 'value') {
                 const raw = valueNode.children.join('')
-                const type = valueNode.attributes[0]?.type
+                const type = getNodeType(valueNode)
                 if (type === 'null') return null
                 if (type === 'boolean') return raw === 'true'
                 if (type === 'number') {
@@ -626,12 +601,14 @@ export function TestPlayground() {
                 }
                 return raw
             }
+
             return valueNode.children.join('')
         }
 
         const rootValue = jsonNode.children.find(
-            (child) => typeof child !== 'string' && (child.element === 'object' || child.element === 'array')
-        ) as ParsedNode | undefined
+            (child): child is JsonRenderableNode =>
+                isJsonNode(child) && (child.element === 'object' || child.element === 'array')
+        )
 
         if (!rootValue) return 'No JSON parsed yet.'
         return JSON.stringify(buildValue(rootValue), null, 2)
@@ -729,19 +706,23 @@ export function TestPlayground() {
                     <div className="flex items-center justify-between mb-3 gap-3">
                         <div>
                             <h2 className="text-sm font-semibold text-zinc-400">Input</h2>
-                            <p className="text-xs text-zinc-500">{selectedConfig.description}</p>
+                            <p className="text-xs text-zinc-500">
+                                {selectedConfig.description}
+                            </p>
                         </div>
-                        <select
-                            value={selectedExample}
-                            onChange={(e) => setSelectedExample(e.target.value)}
-                            className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
-                        >
-                            {exampleConfigs.map((example) => (
-                                <option key={example.id} value={example.id}>
-                                    {example.name}
-                                </option>
-                            ))}
-                        </select>
+                        <div className="flex items-center gap-2">
+                            <select
+                                value={selectedExample}
+                                onChange={(e) => setSelectedExample(e.target.value)}
+                                className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 text-xs"
+                            >
+                                {exampleConfigs.map((example) => (
+                                    <option key={example.id} value={example.id}>
+                                        {example.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                     <textarea
                         value={input}
@@ -824,7 +805,7 @@ export function TestPlayground() {
                         </div>
                     ) : selectedConfig.renderer === 'diagram' ? (
                         <div className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px]">
-                            <DiagramCanvas model={buildDiagramModel(parsedAST)} />
+                            <DiagramCanvas model={buildDiagramModel(parsedAST as ParsedNode | null)} />
                         </div>
                     ) : selectedConfig.renderer === 'json' ? (
                         <pre className="bg-zinc-950 text-zinc-100 rounded-lg p-4 min-h-[200px] text-sm whitespace-pre-wrap">

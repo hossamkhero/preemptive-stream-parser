@@ -181,13 +181,6 @@ const TOKEN_SYMBOL_MAP: Record<Token, string> = {
   [TOKEN_NUMBER]: '0'
 } as const;
 
-// Types for the parser
-interface CompletedSection {
-  sectionName: string;
-  sectionContent: string;
-  sectionContentType?: string;
-}
-
 // helper method check if token is in ignore token
 function isIgnoreToken(c: string): boolean {
   switch (c) {
@@ -244,13 +237,11 @@ class Lexer {
   private JSONSegment: string = ''; // appended JSON segment by the AppendString() method.
   private TokenStack: Token[] = []; // token stack for input JSON
   private MirrorTokenStack: Token[] = []; // token stack for auto-completed tokens
-  private allowedSections: readonly string[] | null;
-  private skipNonValidSections: boolean = false;
-  private completedSections: CompletedSection[] = [];
 
   constructor(allowedSections: readonly string[] | null = null, skipNonValidSections: boolean = false) {
-    this.allowedSections = allowedSections;
-    this.skipNonValidSections = skipNonValidSections;
+    // Keep ctor args for API compatibility; section filtering is not used in current flow.
+    void allowedSections;
+    void skipNonValidSections;
   }
 
   // Get token on the stack top
@@ -1556,7 +1547,6 @@ class Lexer {
     this.JSONSegment = '';
     this.TokenStack = [];
     this.MirrorTokenStack = [];
-    this.completedSections = [];
   }
   private splitTopLevelObjects(s: string) {
     const out = [];
@@ -1639,11 +1629,6 @@ class Lexer {
     return [];
   }
 
-  private isValidSection(section: string): boolean {
-    if (this.skipNonValidSections) return true;
-    if (this.allowedSections === null) return true;
-    return this.allowedSections.includes(section);
-  }
 }
 
 export { Lexer };
