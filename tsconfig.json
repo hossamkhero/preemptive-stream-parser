@@ -27,10 +27,10 @@
         "baseUrl": ".",
         "paths": {
             "@/*": [
-                "src/*"
+                "studio/src/*"
             ],
-            "@lib/*": [
-                "src/lib/*"
+            "@core/*": [
+                "core/*"
             ]
         },
         /* Bun types */
@@ -39,7 +39,8 @@
         ]
     },
     "include": [
-        "src",
+        "core",
+        "studio",
         "*.ts"
     ]
 }
